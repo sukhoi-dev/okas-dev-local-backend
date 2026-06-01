@@ -10,6 +10,7 @@ app = FastAPI(
     title="OKAS Cloud API",
     description="Backend API for the OKAS smart-home platform (We.OKAS portal).",
     version="1.0.0",
+    redirect_slashes=False,  # accept /api/projects and /api/projects/ equally
 )
 
 app.add_middleware(

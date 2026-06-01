@@ -3,7 +3,7 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 from app.db import get_db
 
-router = APIRouter(prefix="/api/projects", tags=["projects"])
+router = APIRouter(prefix="/api/projects", tags=["projects"], redirect_slashes=False)
 
 
 # ── Request / Response models ─────────────────────────────────
@@ -30,7 +30,7 @@ class ProjectCreate(BaseModel):
 
 # ── GET /api/projects ─────────────────────────────────────────
 
-@router.get("/")
+@router.get("")
 def list_projects():
     sql = """
         SELECT
@@ -70,7 +70,7 @@ def list_projects():
 
 # ── POST /api/projects ────────────────────────────────────────
 
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 def create_project(body: ProjectCreate):
     with get_db() as conn:
         with conn.cursor() as cur:
