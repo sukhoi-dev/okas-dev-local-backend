@@ -2,13 +2,13 @@
   "info": {
     "name": "OKAS Cloud Backend",
     "_postman_id": "okas-cloud-backend-v1",
-    "description": "API collection for okas-cloud-backend. Set the `base_url` variable to:\n- Local dev: http://localhost:3000\n- ECS Fargate: http://<task-public-ip>:3000\n\nGet the live task IP: run `./deploy.sh` or use the `get_api_url_command` Terraform output.",
+    "description": "API collection for okas-cloud-backend. Set the `base_url` variable to:\n- Local dev: http://localhost:8000\n- ECS Fargate: http://<task-public-ip>:3000\n\nGet the live task IP: run `./deploy.sh` or use the `get_api_url_command` Terraform output.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     {
       "key": "base_url",
-      "value": "http://localhost:3000",
+      "value": "http://localhost:8000",
       "type": "string",
       "description": "Change to ECS task public IP for cloud testing"
     }
