@@ -1,0 +1,3 @@
+# Default reviewers — required approvers on every PR (require-code-owner-review is enforced via branch protection)
+# TODO: add Manoj once he has a GitHub account in the vyomsystems org (manoj@vyom.ai / manoj@okas.ai)
+*       @yskprasad
