@@ -1,0 +1,157 @@
+{
+  "info": {
+    "name": "OKAS Cloud Backend",
+    "_postman_id": "okas-cloud-backend-v1",
+    "description": "REST API for the OKAS smart-home platform.\n\nEnvironments:\n- **Production**: https://api.okas.ai  (select the 'production' environment)\n- **Local dev**:   http://localhost:8000 (select the 'local' environment)\n\nSwagger UI (interactive, no Postman needed): https://api.okas.ai/docs",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://api.okas.ai",
+      "type": "string",
+      "description": "Production API. Switch to http://localhost:8000 for local dev."
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health",
+          "host": ["{{base_url}}"],
+          "path": ["health"]
+        },
+        "description": "Returns service health. Use this to confirm the ECS task is running."
+      },
+      "response": [
+        {
+          "name": "200 OK",
+          "originalRequest": { "method": "GET", "url": { "raw": "{{base_url}}/health" } },
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"ok\",\"service\":\"okas-cloud-backend\"}"
+        }
+      ]
+    },
+    {
+      "name": "List Projects",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/projects",
+          "host": ["{{base_url}}"],
+          "path": ["api", "projects"]
+        },
+        "description": "Returns all active projects with owner name, manager name, address, serial number, installed date, and subscription status."
+      },
+      "response": [
+        {
+          "name": "200 OK",
+          "originalRequest": { "method": "GET", "url": { "raw": "{{base_url}}/api/projects" } },
+          "status": "OK",
+          "code": 200,
+          "body": "{\"success\":true,\"data\":[{\"id\":1,\"name\":\"Manoj Agarwal - Shree KLG\",\"serial_number\":\"202036\",\"project_type\":\"residential\",\"address\":\"Hn 25, Shree KLG Farms, Sector 12\",\"city\":\"Delhi\",\"state\":null,\"installed_at\":\"2025-02-23T02:25:26\",\"status\":\"active\",\"owner_name\":\"Manoj Agarwal\",\"owner_email\":\"manoj.agarwal@example.com\",\"owner_phone\":\"+91-9812345678\",\"manager_name\":\"Preeti Chauhan\",\"subscription_status\":null}]}"
+        }
+      ]
+    },
+    {
+      "name": "Add Project",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"New Project\",\n  \"serial_number\": \"303030\",\n  \"project_type\": \"residential\",\n  \"address\": \"123 Main Street, Connaught Place\",\n  \"city\": \"New Delhi\",\n  \"state\": \"Delhi\",\n  \"pincode\": \"110001\",\n  \"notes\": \"Near Palika Bazaar\",\n  \"organization_id\": 1,\n  \"project_manager_id\": 1,\n  \"primary_contact\": {\n    \"full_name\": \"Amit Sharma\",\n    \"email\": \"amit.sharma@example.com\",\n    \"phone\": \"+91-9900112233\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{base_url}}/api/projects",
+          "host": ["{{base_url}}"],
+          "path": ["api", "projects"]
+        },
+        "description": "Creates a new project. Also creates the homeowner record if the email doesn't exist, and links them as primary contact.\n\nRequired: `name`, `organization_id`.\nproject_type enum: residential | commercial | hospitality | retail | other."
+      },
+      "response": [
+        {
+          "name": "201 Created",
+          "originalRequest": { "method": "POST", "url": { "raw": "{{base_url}}/api/projects" } },
+          "status": "Created",
+          "code": 201,
+          "body": "{\"success\":true,\"data\":{\"id\":5,\"name\":\"New Project\",\"serial_number\":\"303030\",\"project_type\":\"residential\",\"address\":\"123 Main Street, Connaught Place\",\"city\":\"New Delhi\",\"installed_at\":\"2026-06-01T07:00:00.000000\",\"status\":\"active\",\"owner_name\":\"Amit Sharma\",\"owner_email\":\"amit.sharma@example.com\",\"owner_phone\":\"+91-9900112233\",\"manager_name\":\"Preeti Chauhan\"}}"
+        }
+      ]
+    },
+    {
+      "name": "List App Users (Manager dropdown)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/app-users",
+          "host": ["{{base_url}}"],
+          "path": ["api", "app-users"]
+        },
+        "description": "Returns SI staff (app_users) for the Manager dropdown in the Add Project form."
+      },
+      "response": [
+        {
+          "name": "200 OK",
+          "originalRequest": { "method": "GET", "url": { "raw": "{{base_url}}/api/app-users" } },
+          "status": "OK",
+          "code": 200,
+          "body": "{\"success\":true,\"data\":[{\"id\":1,\"full_name\":\"Preeti Chauhan\",\"email\":\"preeti.chauhan@okas.ai\"},{\"id\":2,\"full_name\":\"Rahul Kumar\",\"email\":\"rahul.kumar@okas.ai\"}]}"
+        }
+      ]
+    },
+    {
+      "name": "List Homeowners (Owner dropdown)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/homeowners",
+          "host": ["{{base_url}}"],
+          "path": ["api", "homeowners"]
+        },
+        "description": "Returns registered homeowners for the Owner dropdown."
+      },
+      "response": [
+        {
+          "name": "200 OK",
+          "originalRequest": { "method": "GET", "url": { "raw": "{{base_url}}/api/homeowners" } },
+          "status": "OK",
+          "code": 200,
+          "body": "{\"success\":true,\"data\":[{\"id\":1,\"full_name\":\"Manoj Agarwal\",\"email\":\"manoj.agarwal@example.com\",\"phone\":\"+91-9812345678\"},{\"id\":2,\"full_name\":\"Shiv Bhansali\",\"email\":\"shiv.bhansali@example.com\",\"phone\":\"+91-9823456789\"}]}"
+        }
+      ]
+    },
+    {
+      "name": "List Organizations",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/organizations",
+          "host": ["{{base_url}}"],
+          "path": ["api", "organizations"]
+        },
+        "description": "Returns organizations. Use the returned `id` as `organization_id` when creating a project."
+      },
+      "response": [
+        {
+          "name": "200 OK",
+          "originalRequest": { "method": "GET", "url": { "raw": "{{base_url}}/api/organizations" } },
+          "status": "OK",
+          "code": 200,
+          "body": "{\"success\":true,\"data\":[{\"id\":1,\"name\":\"OKAS Systems\",\"slug\":\"okas-systems\"}]}"
+        }
+      ]
+    }
+  ]
+}
