@@ -119,6 +119,6 @@ aws amplify start-job --app-id d2gb37zj8vn5sg --branch-name main \
 | DB connection refused | Check bastion tunnel is up; verify okasdev password in SSM |
 | Swagger UI | `http://<alb-dns>/docs` — test requests live from browser |
 
-## Postman collections
+## Postman collection
 
 Import `OKAS_API.postman_collection.json`. Set `base_url` to `http://localhost:8000` (local) or the ALB DNS (cloud).
