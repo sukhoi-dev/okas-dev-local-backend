@@ -2,11 +2,14 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, validator
 from typing import Optional, List
+from sqlalchemy.orm import Session
+from sqlalchemy import func
 import uuid
-import json
 
 from app.auth import get_current_user
-from app.db import get_db
+from app.db import get_orm_session
+from app.models.auth import AppUser, AppUserRole, Role, RolePermission
+from app.models.audit import AuditLog
 
 router = APIRouter(
     prefix="/we-okas/roles",
@@ -15,14 +18,15 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
+
 # ── Response helpers ─────────────────────────────────────────────────────────
 
 def _resp(status_code: int, message: str, body=None) -> dict:
     return {
-        "id": str(uuid.uuid4()),
-        "status": status_code,
+        "id":      str(uuid.uuid4()),
+        "status":  status_code,
         "message": message,
-        "body": body,
+        "body":    body,
     }
 
 
@@ -47,8 +51,8 @@ class ProjectsPermission(BaseModel):
 
 class MembersPermission(BaseModel):
     create: bool = False
-    view: bool = False
-    edit: bool = False
+    view:   bool = False
+    edit:   bool = False
     delete: bool = False
 
 
@@ -57,13 +61,13 @@ class DesignStudioPermission(BaseModel):
 
 
 class PermissionsBody(BaseModel):
-    projects: Optional[ProjectsPermission] = None
-    members: Optional[MembersPermission] = None
-    design_studio: Optional[DesignStudioPermission] = None
+    projects:      Optional[ProjectsPermission]      = None
+    members:       Optional[MembersPermission]       = None
+    design_studio: Optional[DesignStudioPermission]  = None
 
 
 class RoleCreate(BaseModel):
-    name: str
+    name:        str
     description: Optional[str] = None
     permissions: PermissionsBody
 
@@ -91,8 +95,8 @@ class RoleCreate(BaseModel):
 
 
 class RoleUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name:        Optional[str]           = None
+    description: Optional[str]           = None
     permissions: Optional[PermissionsBody] = None
 
     @validator("name")
@@ -108,149 +112,149 @@ class RoleUpdate(BaseModel):
 
 class ReassignBody(BaseModel):
     new_role_id: int
-    member_ids: Optional[List[int]] = None
+    member_ids:  Optional[List[int]] = None
 
 
-# ── Internal helpers ─────────────────────────────────────────────────────────
+# ── ORM helpers ──────────────────────────────────────────────────────────────
 
-def _permissions_to_rows(permissions: PermissionsBody) -> list:
-    rows = []
-    if permissions.projects:
-        scope = permissions.projects.scope
-        if scope != "none":
-            rows.append(("projects", scope, True))
-    if permissions.members:
-        for action in ("create", "view", "edit", "delete"):
-            rows.append(("members", action, getattr(permissions.members, action)))
-    if permissions.design_studio:
-        rows.append(("design_studio", "access", permissions.design_studio.access))
-    return rows
-
-
-def _build_permissions(perm_rows: list) -> dict:
+def _build_permissions(perms: List[RolePermission]) -> dict:
+    """Reconstruct the structured permissions dict from ORM RolePermission objects."""
     result = {
-        "projects": {"scope": "none"},
-        "members": {"create": False, "view": False, "edit": False, "delete": False},
+        "projects":      {"scope": "none"},
+        "members":       {"create": False, "view": False, "edit": False, "delete": False},
         "design_studio": {"access": False},
     }
-    for row in perm_rows:
-        feature, action, is_allowed = row["feature"], row["action"], bool(row["is_allowed"])
-        if feature == "projects" and is_allowed:
+    for p in perms:
+        feature, action, allowed = p.feature, p.action, bool(p.is_allowed)
+        if feature == "projects" and allowed:
             result["projects"]["scope"] = action
         elif feature == "members" and action in result["members"]:
-            result["members"][action] = is_allowed
+            result["members"][action] = allowed
         elif feature == "design_studio" and action == "access":
-            result["design_studio"]["access"] = is_allowed
+            result["design_studio"]["access"] = allowed
     return result
 
 
-def _fetch_role_row(cur, role_id: int):
-    cur.execute(
-        """
-        SELECT r.id, r.name, r.description, r.created_at,
-               COUNT(DISTINCT aur.id) AS member_count
-        FROM roles r
-        LEFT JOIN app_user_roles aur ON aur.role_id = r.id
-        WHERE r.id = %s
-        GROUP BY r.id, r.name, r.description, r.created_at
-        """,
-        (role_id,),
-    )
-    row = cur.fetchone()
-    if not row:
+def _permissions_to_models(role_id: int, permissions: PermissionsBody) -> List[RolePermission]:
+    """Convert a PermissionsBody into a list of RolePermission ORM objects."""
+    models: List[RolePermission] = []
+    if permissions.projects:
+        scope = permissions.projects.scope
+        if scope != "none":
+            models.append(RolePermission(role_id=role_id, feature="projects", action=scope, is_allowed=True))
+    if permissions.members:
+        for action in ("create", "view", "edit", "delete"):
+            models.append(RolePermission(
+                role_id=role_id, feature="members",
+                action=action, is_allowed=getattr(permissions.members, action),
+            ))
+    if permissions.design_studio:
+        models.append(RolePermission(
+            role_id=role_id, feature="design_studio",
+            action="access", is_allowed=permissions.design_studio.access,
+        ))
+    return models
+
+
+def _fmt_role(role: Role, perms: List[RolePermission], member_count: int) -> dict:
+    return {
+        "id":           role.id,
+        "name":         role.name,
+        "description":  role.description,
+        "created_at":   role.created_at.isoformat() if role.created_at else None,
+        "member_count": member_count,
+        "permissions":  _build_permissions(perms),
+    }
+
+
+def _fetch_role(db: Session, role_id: int) -> Optional[dict]:
+    """Load a single role with its permissions and member count."""
+    role = db.query(Role).filter(Role.id == role_id).first()
+    if not role:
         return None
-    cur.execute(
-        "SELECT feature, action, is_allowed FROM role_permissions WHERE role_id = %s",
-        (role_id,),
-    )
-    perm_rows = cur.fetchall()
-    if row.get("created_at"):
-        row["created_at"] = row["created_at"].isoformat()
-    row["permissions"] = _build_permissions(perm_rows)
-    return row
+    perms  = db.query(RolePermission).filter(RolePermission.role_id == role_id).all()
+    count  = db.query(func.count(AppUserRole.id)).filter(AppUserRole.role_id == role_id).scalar() or 0
+    return _fmt_role(role, perms, count)
 
 
 # ── STORY 1 — View roles ─────────────────────────────────────────────────────
 
 @router.get("")
-def list_roles(search: Optional[str] = Query(None)):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            if search:
-                cur.execute(
-                    """
-                    SELECT r.id, r.name, r.description, r.created_at,
-                           COUNT(DISTINCT aur.id) AS member_count
-                    FROM roles r
-                    LEFT JOIN app_user_roles aur ON aur.role_id = r.id
-                    WHERE r.name LIKE %s OR r.description LIKE %s
-                    GROUP BY r.id, r.name, r.description, r.created_at
-                    ORDER BY r.created_at DESC
-                    """,
-                    (f"%{search}%", f"%{search}%"),
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT r.id, r.name, r.description, r.created_at,
-                           COUNT(DISTINCT aur.id) AS member_count
-                    FROM roles r
-                    LEFT JOIN app_user_roles aur ON aur.role_id = r.id
-                    GROUP BY r.id, r.name, r.description, r.created_at
-                    ORDER BY r.created_at DESC
-                    """
-                )
-            rows = cur.fetchall()
+def list_roles(
+    search: Optional[str] = Query(None),
+    db: Session           = Depends(get_orm_session),
+):
+    # Member count per role via subquery — avoids N+1
+    mc_subq = (
+        db.query(
+            AppUserRole.role_id.label("role_id"),
+            func.count(AppUserRole.id).label("cnt"),
+        )
+        .group_by(AppUserRole.role_id)
+        .subquery("mc")
+    )
 
-            role_ids = [r["id"] for r in rows]
-            perm_map: dict = {}
-            if role_ids:
-                placeholders = ",".join(["%s"] * len(role_ids))
-                cur.execute(
-                    f"SELECT role_id, feature, action, is_allowed "
-                    f"FROM role_permissions WHERE role_id IN ({placeholders})",
-                    role_ids,
-                )
-                for pr in cur.fetchall():
-                    perm_map.setdefault(pr["role_id"], []).append(pr)
+    q = (
+        db.query(Role, func.coalesce(mc_subq.c.cnt, 0).label("member_count"))
+        .outerjoin(mc_subq, mc_subq.c.role_id == Role.id)
+    )
 
-            for r in rows:
-                if r.get("created_at"):
-                    r["created_at"] = r["created_at"].isoformat()
-                r["permissions"] = _build_permissions(perm_map.get(r["id"], []))
+    if search:
+        like = f"%{search}%"
+        q = q.filter(Role.name.ilike(like) | Role.description.ilike(like))
 
-    return _resp(200, "Roles retrieved successfully", rows)
+    role_rows = q.order_by(Role.created_at.desc()).all()
+
+    # Fetch all permissions in one query, then group by role_id
+    role_ids  = [r.id for r, _ in role_rows]
+    perm_map: dict = {}
+    if role_ids:
+        all_perms = db.query(RolePermission).filter(RolePermission.role_id.in_(role_ids)).all()
+        for p in all_perms:
+            perm_map.setdefault(p.role_id, []).append(p)
+
+    data = [
+        _fmt_role(role, perm_map.get(role.id, []), count)
+        for role, count in role_rows
+    ]
+    return _resp(200, "Roles retrieved successfully", data)
 
 
 @router.get("/{role_id}/members")
-def get_role_members(role_id: int):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id FROM roles WHERE id = %s", (role_id,))
-            if not cur.fetchone():
-                return _err(404, "Role not found")
+def get_role_members(
+    role_id: int,
+    db: Session = Depends(get_orm_session),
+):
+    if not db.query(Role).filter(Role.id == role_id).first():
+        return _err(404, "Role not found")
 
-            cur.execute(
-                """
-                SELECT aur.id AS assignment_id,
-                       u.id AS user_id, u.full_name, u.email, u.avatar_url
-                FROM app_user_roles aur
-                JOIN app_users u ON u.id = aur.user_id
-                WHERE aur.role_id = %s
-                ORDER BY u.full_name
-                """,
-                (role_id,),
-            )
-            members = cur.fetchall()
+    rows = (
+        db.query(AppUserRole, AppUser)
+        .join(AppUser, AppUser.id == AppUserRole.user_id)
+        .filter(AppUserRole.role_id == role_id)
+        .order_by(AppUser.full_name)
+        .all()
+    )
 
+    members = [
+        {
+            "assignment_id": aur.id,
+            "user_id":       u.id,
+            "full_name":     u.full_name,
+            "email":         u.email,
+            "avatar_url":    u.avatar_url,
+        }
+        for aur, u in rows
+    ]
     return _resp(200, "Role members retrieved successfully", members)
 
 
 @router.get("/{role_id}")
-def get_role(role_id: int):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            role = _fetch_role_row(cur, role_id)
+def get_role(
+    role_id: int,
+    db: Session = Depends(get_orm_session),
+):
+    role = _fetch_role(db, role_id)
     if not role:
         return _err(404, "Role not found")
     return _resp(200, "Role retrieved successfully", role)
@@ -259,197 +263,170 @@ def get_role(role_id: int):
 # ── STORY 2 — Create role ────────────────────────────────────────────────────
 
 @router.post("", status_code=201)
-def create_role(body: RoleCreate):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id FROM roles WHERE name = %s", (body.name,))
-            if cur.fetchone():
-                return _err(409, "Role name already exists")
+def create_role(
+    body: RoleCreate,
+    db: Session = Depends(get_orm_session),
+):
+    # Name uniqueness
+    if db.query(Role).filter(Role.name == body.name).first():
+        return _err(409, "Role name already exists")
 
-            cur.execute(
-                "INSERT INTO roles (name, description) VALUES (%s, %s)",
-                (body.name, body.description),
-            )
-            role_id = cur.lastrowid
+    role = Role(name=body.name, description=body.description)
+    db.add(role)
+    db.flush()   # populate role.id
 
-            for feature, action, is_allowed in _permissions_to_rows(body.permissions):
-                cur.execute(
-                    "INSERT INTO role_permissions (role_id, feature, action, is_allowed) "
-                    "VALUES (%s, %s, %s, %s)",
-                    (role_id, feature, action, is_allowed),
-                )
+    for perm in _permissions_to_models(role.id, body.permissions):
+        db.add(perm)
 
-            cur.execute(
-                "INSERT INTO audit_logs (action, entity_type, entity_id, new_value) "
-                "VALUES (%s, %s, %s, %s)",
-                ("role_created", "role", role_id, json.dumps({"name": body.name})),
-            )
+    db.add(AuditLog(
+        action="role_created",
+        entity_type="role",
+        entity_id=role.id,
+        new_value={"name": body.name},
+    ))
 
-            role = _fetch_role_row(cur, role_id)
-
-    return _resp(201, "Role created successfully", role)
+    db.flush()
+    return _resp(201, "Role created successfully", _fetch_role(db, role.id))
 
 
 # ── STORY 3 — Edit role ──────────────────────────────────────────────────────
 
 @router.put("/{role_id}")
-def update_role(role_id: int, body: RoleCreate):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, name FROM roles WHERE id = %s", (role_id,))
-            existing = cur.fetchone()
-            if not existing:
-                return _err(404, "Role not found")
+def update_role(
+    role_id: int,
+    body: RoleCreate,
+    db: Session = Depends(get_orm_session),
+):
+    role = db.query(Role).filter(Role.id == role_id).first()
+    if not role:
+        return _err(404, "Role not found")
 
-            if body.name != existing["name"]:
-                cur.execute(
-                    "SELECT id FROM roles WHERE name = %s AND id != %s",
-                    (body.name, role_id),
-                )
-                if cur.fetchone():
-                    return _err(409, "Role name already exists")
+    # Name uniqueness (skip if unchanged)
+    if body.name != role.name:
+        if db.query(Role).filter(Role.name == body.name, Role.id != role_id).first():
+            return _err(409, "Role name already exists")
 
-            cur.execute(
-                "UPDATE roles SET name = %s, description = %s WHERE id = %s",
-                (body.name, body.description, role_id),
-            )
+    role.name        = body.name
+    role.description = body.description
 
-            cur.execute("DELETE FROM role_permissions WHERE role_id = %s", (role_id,))
-            for feature, action, is_allowed in _permissions_to_rows(body.permissions):
-                cur.execute(
-                    "INSERT INTO role_permissions (role_id, feature, action, is_allowed) "
-                    "VALUES (%s, %s, %s, %s)",
-                    (role_id, feature, action, is_allowed),
-                )
+    # Replace all permissions
+    db.query(RolePermission).filter(RolePermission.role_id == role_id).delete(synchronize_session=False)
+    for perm in _permissions_to_models(role_id, body.permissions):
+        db.add(perm)
 
-            cur.execute(
-                "INSERT INTO audit_logs (action, entity_type, entity_id, new_value) "
-                "VALUES (%s, %s, %s, %s)",
-                ("role_updated", "role", role_id, json.dumps({"name": body.name})),
-            )
+    db.add(AuditLog(
+        action="role_updated",
+        entity_type="role",
+        entity_id=role_id,
+        new_value={"name": body.name},
+    ))
 
-            role = _fetch_role_row(cur, role_id)
-
-    return _resp(200, "Role updated successfully", role)
+    db.flush()
+    return _resp(200, "Role updated successfully", _fetch_role(db, role_id))
 
 
 @router.patch("/{role_id}")
-def partial_update_role(role_id: int, body: RoleUpdate):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, name, description FROM roles WHERE id = %s", (role_id,)
-            )
-            existing = cur.fetchone()
-            if not existing:
-                return _err(404, "Role not found")
+def partial_update_role(
+    role_id: int,
+    body: RoleUpdate,
+    db: Session = Depends(get_orm_session),
+):
+    role = db.query(Role).filter(Role.id == role_id).first()
+    if not role:
+        return _err(404, "Role not found")
 
-            new_name = body.name if body.name is not None else existing["name"]
-            new_desc = body.description if body.description is not None else existing["description"]
+    # Name uniqueness (only if changing)
+    if body.name is not None and body.name != role.name:
+        if db.query(Role).filter(Role.name == body.name, Role.id != role_id).first():
+            return _err(409, "Role name already exists")
 
-            if body.name is not None and body.name != existing["name"]:
-                cur.execute(
-                    "SELECT id FROM roles WHERE name = %s AND id != %s",
-                    (body.name, role_id),
-                )
-                if cur.fetchone():
-                    return _err(409, "Role name already exists")
+    if body.name        is not None: role.name        = body.name
+    if body.description is not None: role.description = body.description
 
-            cur.execute(
-                "UPDATE roles SET name = %s, description = %s WHERE id = %s",
-                (new_name, new_desc, role_id),
-            )
+    if body.permissions is not None:
+        db.query(RolePermission).filter(
+            RolePermission.role_id == role_id,
+        ).delete(synchronize_session=False)
+        for perm in _permissions_to_models(role_id, body.permissions):
+            db.add(perm)
 
-            if body.permissions is not None:
-                cur.execute("DELETE FROM role_permissions WHERE role_id = %s", (role_id,))
-                for feature, action, is_allowed in _permissions_to_rows(body.permissions):
-                    cur.execute(
-                        "INSERT INTO role_permissions (role_id, feature, action, is_allowed) "
-                        "VALUES (%s, %s, %s, %s)",
-                        (role_id, feature, action, is_allowed),
-                    )
+    db.add(AuditLog(
+        action="role_patched",
+        entity_type="role",
+        entity_id=role_id,
+    ))
 
-            cur.execute(
-                "INSERT INTO audit_logs (action, entity_type, entity_id) VALUES (%s, %s, %s)",
-                ("role_patched", "role", role_id),
-            )
-
-            role = _fetch_role_row(cur, role_id)
-
-    return _resp(200, "Role updated successfully", role)
+    db.flush()
+    return _resp(200, "Role updated successfully", _fetch_role(db, role_id))
 
 
 # ── STORY 4 — Delete role ────────────────────────────────────────────────────
 
 @router.post("/{role_id}/reassign")
-def reassign_role_members(role_id: int, body: ReassignBody):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id FROM roles WHERE id = %s", (role_id,))
-            if not cur.fetchone():
-                return _err(404, "Role not found")
+def reassign_role_members(
+    role_id: int,
+    body: ReassignBody,
+    db: Session = Depends(get_orm_session),
+):
+    if not db.query(Role).filter(Role.id == role_id).first():
+        return _err(404, "Role not found")
 
-            cur.execute("SELECT id FROM roles WHERE id = %s", (body.new_role_id,))
-            if not cur.fetchone():
-                return _err(404, "Target role not found")
+    if not db.query(Role).filter(Role.id == body.new_role_id).first():
+        return _err(404, "Target role not found")
 
-            if body.new_role_id == role_id:
-                return _err(400, "Cannot reassign members to the same role")
+    if body.new_role_id == role_id:
+        return _err(400, "Cannot reassign members to the same role")
 
-            member_ids = body.member_ids or None
+    q = db.query(AppUserRole).filter(AppUserRole.role_id == role_id)
+    if body.member_ids:
+        q = q.filter(AppUserRole.user_id.in_(body.member_ids))
 
-            if member_ids:
-                placeholders = ",".join(["%s"] * len(member_ids))
-                cur.execute(
-                    f"UPDATE app_user_roles SET role_id = %s "
-                    f"WHERE role_id = %s AND user_id IN ({placeholders})",
-                    [body.new_role_id, role_id] + list(member_ids),
-                )
-            else:
-                cur.execute(
-                    "UPDATE app_user_roles SET role_id = %s WHERE role_id = %s",
-                    (body.new_role_id, role_id),
-                )
-            affected = cur.rowcount
+    affected = q.update({"role_id": body.new_role_id}, synchronize_session=False)
 
-            cur.execute(
-                "INSERT INTO audit_logs (action, entity_type, entity_id, new_value) "
-                "VALUES (%s, %s, %s, %s)",
-                (
-                    "role_members_reassigned",
-                    "role",
-                    role_id,
-                    json.dumps({"new_role_id": body.new_role_id, "affected_count": affected}),
-                ),
-            )
+    db.add(AuditLog(
+        action="role_members_reassigned",
+        entity_type="role",
+        entity_id=role_id,
+        new_value={"new_role_id": body.new_role_id, "affected_count": affected},
+    ))
 
     return _resp(200, f"{affected} member(s) reassigned successfully", {"affected_count": affected})
 
 
 @router.delete("/{role_id}")
-def delete_role(role_id: int):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id FROM roles WHERE id = %s", (role_id,))
-            if not cur.fetchone():
-                return _err(404, "Role not found")
+def delete_role(
+    role_id: int,
+    db: Session = Depends(get_orm_session),
+):
+    role = db.query(Role).filter(Role.id == role_id).first()
+    if not role:
+        return _err(404, "Role not found")
 
-            cur.execute(
-                "SELECT COUNT(*) AS cnt FROM app_user_roles WHERE role_id = %s", (role_id,)
-            )
-            cnt = cur.fetchone()["cnt"]
-            if cnt > 0:
-                return _err(
-                    409,
-                    f"Role has {cnt} assigned member(s). Reassign them before deleting.",
-                )
+    # Block deletion if members are still assigned
+    member_count = (
+        db.query(func.count(AppUserRole.id))
+        .filter(AppUserRole.role_id == role_id)
+        .scalar() or 0
+    )
+    if member_count > 0:
+        return _err(
+            409,
+            f"Role has {member_count} assigned member(s). Reassign them before deleting.",
+        )
 
-            cur.execute("DELETE FROM role_permissions WHERE role_id = %s", (role_id,))
-            cur.execute("DELETE FROM roles WHERE id = %s", (role_id,))
+    # Delete child records first (FK constraint)
+    db.query(RolePermission).filter(
+        RolePermission.role_id == role_id,
+    ).delete(synchronize_session=False)
+    db.flush()   # ensure permissions are gone before deleting the role row
 
-            cur.execute(
-                "INSERT INTO audit_logs (action, entity_type, entity_id) VALUES (%s, %s, %s)",
-                ("role_deleted", "role", role_id),
-            )
+    db.add(AuditLog(
+        action="role_deleted",
+        entity_type="role",
+        entity_id=role_id,
+        old_value={"name": role.name},
+    ))
+
+    db.delete(role)   # use ORM delete so identity map stays consistent
 
     return _resp(200, "Role deleted successfully", None)

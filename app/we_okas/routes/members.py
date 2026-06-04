@@ -2,11 +2,15 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, validator
 from typing import Optional
+from sqlalchemy.orm import Session
+from sqlalchemy import func
 import uuid
-import json
 
 from app.auth import require_permission
-from app.db import get_db
+from app.db import get_orm_session
+from app.models.auth import AppUser, AppUserRole, Role, RolePermission, AppSession
+from app.models.audit import AuditLog
+from app.models.projects import ProjectMember
 
 router = APIRouter(
     prefix="/we-okas/members",
@@ -73,49 +77,56 @@ class MemberUpdate(BaseModel):
         return v
 
 
-# ── SQL base select ──────────────────────────────────────────────────────────
-# Fetches one row per user by anchoring to MAX(aur.id) — the latest role
-# assignment — so duplicate rows never appear even if a user had multiple
-# historical role entries.
+# ── ORM query helpers ────────────────────────────────────────────────────────
 
-_SELECT = """
-    SELECT
-        u.id, u.full_name, u.email, u.phone,
-        u.organization_id, u.active_ind,
-        CASE WHEN u.active_ind = 1 THEN 'active' ELSE 'inactive' END AS status,
-        u.created_at, u.updated_at,
-        r.id   AS role_id,
-        r.name AS role_name,
-        COALESCE(rp_ds.is_allowed, FALSE) AS has_design_studio_access
-    FROM app_users u
-    LEFT JOIN app_user_roles aur
-           ON aur.user_id = u.id
-          AND aur.id = (SELECT MAX(a2.id) FROM app_user_roles a2 WHERE a2.user_id = u.id)
-    LEFT JOIN roles r ON r.id = aur.role_id
-    LEFT JOIN role_permissions rp_ds
-           ON rp_ds.role_id = aur.role_id
-          AND rp_ds.feature = 'design_studio'
-          AND rp_ds.action  = 'access'
-"""
+def _member_query(db: Session):
+    """
+    Base SQLAlchemy query returning tuples of (AppUser, Role|None, is_allowed|None).
+
+    Strategy: find the latest AppUserRole per user via a GROUP-BY subquery, then
+    left-join outward to Role and RolePermission (design_studio.access only).
+    This guarantees exactly one row per AppUser, matching the original SQL logic.
+    """
+    # Subquery: latest AppUserRole.id for each user_id
+    latest_aur = (
+        db.query(
+            AppUserRole.user_id.label("user_id"),
+            func.max(AppUserRole.id).label("max_id"),
+        )
+        .group_by(AppUserRole.user_id)
+        .subquery("latest_aur")
+    )
+
+    return (
+        db.query(AppUser, Role, RolePermission.is_allowed)
+        .outerjoin(latest_aur, latest_aur.c.user_id == AppUser.id)
+        .outerjoin(AppUserRole, AppUserRole.id == latest_aur.c.max_id)
+        .outerjoin(Role, Role.id == AppUserRole.role_id)
+        .outerjoin(
+            RolePermission,
+            (RolePermission.role_id == AppUserRole.role_id)
+            & (RolePermission.feature == "design_studio")
+            & (RolePermission.action  == "access"),
+        )
+    )
 
 
-def _fmt(row: dict) -> dict:
-    if not row:
-        return None
+def _fmt(row) -> dict:
+    """Format a (AppUser, Role|None, is_allowed|None) tuple into the API response shape."""
+    user: AppUser          = row[0]
+    role: Optional[Role]   = row[1]
+    has_ds                 = row[2]
     return {
-        "id":                     row["id"],
-        "full_name":              row["full_name"],
-        "email":                  row["email"],
-        "phone":                  row["phone"],
-        "organization_id":        row["organization_id"],
-        "status":                 row["status"],
-        "has_design_studio_access": bool(row["has_design_studio_access"]),
-        "role": (
-            {"id": row["role_id"], "name": row["role_name"]}
-            if row.get("role_id") else None
-        ),
-        "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
-        "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
+        "id":                     user.id,
+        "full_name":              user.full_name,
+        "email":                  user.email,
+        "phone":                  user.phone,
+        "organization_id":        user.organization_id,
+        "status":                 "active" if user.active_ind else "inactive",
+        "has_design_studio_access": bool(has_ds) if has_ds is not None else False,
+        "role": {"id": role.id, "name": role.name} if role else None,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "updated_at": user.updated_at.isoformat() if user.updated_at else None,
     }
 
 
@@ -126,35 +137,30 @@ def list_members(
     search: Optional[str] = Query(None, description="Filter by name or email"),
     role:   Optional[str] = Query(None, description="Filter by role name or ID"),
     status: Optional[str] = Query(None, description="active | inactive | all (default: active)"),
-    current_user: dict = Depends(require_permission("members", "view")),
+    current_user: dict    = Depends(require_permission("members", "view")),
+    db: Session           = Depends(get_orm_session),
 ):
-    conditions: list = []
-    params:     list = []
+    q = _member_query(db)
 
-    # status filter — default to active only
+    # Status filter — default to active only
     if status == "inactive":
-        conditions.append("u.active_ind = 0")
+        q = q.filter(AppUser.active_ind == False)
     elif status == "all":
-        pass  # no active_ind filter
+        pass
     else:
-        conditions.append("u.active_ind = 1")
+        q = q.filter(AppUser.active_ind == True)
 
     if search:
-        conditions.append("(u.full_name LIKE %s OR u.email LIKE %s)")
-        params += [f"%{search}%", f"%{search}%"]
+        like = f"%{search}%"
+        q = q.filter(AppUser.full_name.ilike(like) | AppUser.email.ilike(like))
 
     if role:
-        conditions.append("(r.name = %s OR r.id = %s)")
-        params += [role, int(role) if role.isdigit() else -1]
+        if role.isdigit():
+            q = q.filter(Role.id == int(role))
+        else:
+            q = q.filter(Role.name == role)
 
-    where  = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    sql    = f"{_SELECT} {where} ORDER BY u.created_at DESC"
-
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            rows = cur.fetchall()
-
+    rows = q.order_by(AppUser.created_at.desc()).all()
     return _resp(200, "Members retrieved successfully", [_fmt(r) for r in rows])
 
 
@@ -162,11 +168,9 @@ def list_members(
 def get_member(
     member_id: int,
     current_user: dict = Depends(require_permission("members", "view")),
+    db: Session        = Depends(get_orm_session),
 ):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"{_SELECT} WHERE u.id = %s", (member_id,))
-            row = cur.fetchone()
+    row = _member_query(db).filter(AppUser.id == member_id).first()
     if not row:
         return _err(404, "Member not found")
     return _resp(200, "Member retrieved successfully", _fmt(row))
@@ -178,51 +182,46 @@ def get_member(
 def create_member(
     body: MemberCreate,
     current_user: dict = Depends(require_permission("members", "create")),
+    db: Session        = Depends(get_orm_session),
 ):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            # email uniqueness
-            cur.execute("SELECT id FROM app_users WHERE email = %s", (body.email,))
-            if cur.fetchone():
-                return _err(409, "Email address is already registered")
+    # Validate: email uniqueness
+    if db.query(AppUser).filter(AppUser.email == str(body.email)).first():
+        return _err(409, "Email address is already registered")
 
-            # valid role
-            cur.execute("SELECT id FROM roles WHERE id = %s", (body.role_id,))
-            if not cur.fetchone():
-                return _err(404, "Role not found")
+    # Validate: role exists
+    if not db.query(Role).filter(Role.id == body.role_id).first():
+        return _err(404, "Role not found")
 
-            active_ind = 1 if body.status == "active" else 0
+    # Create user
+    user = AppUser(
+        organization_id=body.organization_id,
+        full_name=body.full_name,
+        email=str(body.email),
+        phone=body.phone,
+        active_ind=(body.status == "active"),
+    )
+    db.add(user)
+    db.flush()   # get user.id before related inserts
 
-            cur.execute(
-                """
-                INSERT INTO app_users (organization_id, full_name, email, phone, active_ind)
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                (body.organization_id, body.full_name, body.email, body.phone, active_ind),
-            )
-            member_id = cur.lastrowid
+    # Assign role
+    db.add(AppUserRole(
+        user_id=user.id,
+        role_id=body.role_id,
+        organization_id=body.organization_id,
+    ))
 
-            cur.execute(
-                "INSERT INTO app_user_roles (user_id, role_id, organization_id) VALUES (%s, %s, %s)",
-                (member_id, body.role_id, body.organization_id),
-            )
+    # Audit
+    db.add(AuditLog(
+        actor_id=current_user["user_id"],
+        action="member_created",
+        entity_type="app_user",
+        entity_id=user.id,
+        new_value={"email": str(body.email), "role_id": body.role_id},
+    ))
 
-            cur.execute(
-                "INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, new_value) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (
-                    current_user["user_id"],
-                    "member_created",
-                    "app_user",
-                    member_id,
-                    json.dumps({"email": body.email, "role_id": body.role_id}),
-                ),
-            )
-
-            cur.execute(f"{_SELECT} WHERE u.id = %s", (member_id,))
-            created = cur.fetchone()
-
-    return _resp(201, "Member created successfully", _fmt(created))
+    db.flush()   # make new rows visible in the same session before SELECT
+    row = _member_query(db).filter(AppUser.id == user.id).first()
+    return _resp(201, "Member created successfully", _fmt(row))
 
 
 # ── STORY 3 — Edit member ────────────────────────────────────────────────────
@@ -232,73 +231,56 @@ def update_member(
     member_id: int,
     body: MemberCreate,
     current_user: dict = Depends(require_permission("members", "edit")),
+    db: Session        = Depends(get_orm_session),
 ):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, email, organization_id FROM app_users WHERE id = %s",
-                (member_id,),
-            )
-            existing = cur.fetchone()
-            if not existing:
-                return _err(404, "Member not found")
+    user = db.query(AppUser).filter(AppUser.id == member_id).first()
+    if not user:
+        return _err(404, "Member not found")
 
-            # email uniqueness check (skip if unchanged)
-            if body.email.lower() != existing["email"].lower():
-                cur.execute(
-                    "SELECT id FROM app_users WHERE email = %s AND id != %s",
-                    (body.email, member_id),
-                )
-                if cur.fetchone():
-                    return _err(409, "Email address is already registered")
+    # Email uniqueness (only if changing)
+    if str(body.email).lower() != user.email.lower():
+        if db.query(AppUser).filter(
+            AppUser.email == str(body.email),
+            AppUser.id    != member_id,
+        ).first():
+            return _err(409, "Email address is already registered")
 
-            # valid role
-            cur.execute("SELECT id FROM roles WHERE id = %s", (body.role_id,))
-            if not cur.fetchone():
-                return _err(404, "Role not found")
+    # Role exists
+    if not db.query(Role).filter(Role.id == body.role_id).first():
+        return _err(404, "Role not found")
 
-            active_ind = 1 if body.status == "active" else 0
+    # Update user fields
+    user.full_name       = body.full_name
+    user.email           = str(body.email)
+    user.phone           = body.phone
+    user.organization_id = body.organization_id
+    user.active_ind      = (body.status == "active")
+    user.updated_by      = current_user["user_id"]
 
-            cur.execute(
-                """
-                UPDATE app_users
-                SET full_name = %s, email = %s, phone = %s,
-                    organization_id = %s, active_ind = %s, updated_by = %s
-                WHERE id = %s
-                """,
-                (
-                    body.full_name, body.email, body.phone,
-                    body.organization_id, active_ind,
-                    current_user["user_id"], member_id,
-                ),
-            )
+    # Replace role assignment within the organisation
+    db.query(AppUserRole).filter(
+        AppUserRole.user_id        == member_id,
+        AppUserRole.organization_id == body.organization_id,
+    ).delete(synchronize_session=False)
 
-            # replace role assignment within the organisation
-            cur.execute(
-                "DELETE FROM app_user_roles WHERE user_id = %s AND organization_id = %s",
-                (member_id, body.organization_id),
-            )
-            cur.execute(
-                "INSERT INTO app_user_roles (user_id, role_id, organization_id) VALUES (%s, %s, %s)",
-                (member_id, body.role_id, body.organization_id),
-            )
+    db.add(AppUserRole(
+        user_id=member_id,
+        role_id=body.role_id,
+        organization_id=body.organization_id,
+    ))
 
-            cur.execute(
-                "INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, new_value) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (
-                    current_user["user_id"],
-                    "member_updated",
-                    "app_user",
-                    member_id,
-                    json.dumps({"email": body.email, "role_id": body.role_id}),
-                ),
-            )
+    # Audit
+    db.add(AuditLog(
+        actor_id=current_user["user_id"],
+        action="member_updated",
+        entity_type="app_user",
+        entity_id=member_id,
+        new_value={"email": str(body.email), "role_id": body.role_id},
+    ))
 
-            cur.execute(f"{_SELECT} WHERE u.id = %s", (member_id,))
-            updated = cur.fetchone()
-
-    return _resp(200, "Member updated successfully", _fmt(updated))
+    db.flush()
+    row = _member_query(db).filter(AppUser.id == member_id).first()
+    return _resp(200, "Member updated successfully", _fmt(row))
 
 
 @router.patch("/{member_id}")
@@ -306,72 +288,56 @@ def partial_update_member(
     member_id: int,
     body: MemberUpdate,
     current_user: dict = Depends(require_permission("members", "edit")),
+    db: Session        = Depends(get_orm_session),
 ):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, full_name, email, phone, organization_id, active_ind "
-                "FROM app_users WHERE id = %s",
-                (member_id,),
-            )
-            existing = cur.fetchone()
-            if not existing:
-                return _err(404, "Member not found")
+    user = db.query(AppUser).filter(AppUser.id == member_id).first()
+    if not user:
+        return _err(404, "Member not found")
 
-            # resolve new values — fall back to existing if not provided
-            new_name   = body.full_name if body.full_name is not None else existing["full_name"]
-            new_email  = str(body.email) if body.email is not None else existing["email"]
-            new_phone  = body.phone if body.phone is not None else existing["phone"]
-            new_active = (
-                (1 if body.status == "active" else 0)
-                if body.status is not None
-                else existing["active_ind"]
-            )
+    # Email uniqueness (only if changing)
+    if body.email is not None and str(body.email).lower() != user.email.lower():
+        if db.query(AppUser).filter(
+            AppUser.email == str(body.email),
+            AppUser.id    != member_id,
+        ).first():
+            return _err(409, "Email address is already registered")
 
-            # email uniqueness (only if changing)
-            if body.email is not None and new_email.lower() != existing["email"].lower():
-                cur.execute(
-                    "SELECT id FROM app_users WHERE email = %s AND id != %s",
-                    (new_email, member_id),
-                )
-                if cur.fetchone():
-                    return _err(409, "Email address is already registered")
+    # Role validation (only if changing)
+    if body.role_id is not None:
+        if not db.query(Role).filter(Role.id == body.role_id).first():
+            return _err(404, "Role not found")
 
-            # role validation (only if changing)
-            if body.role_id is not None:
-                cur.execute("SELECT id FROM roles WHERE id = %s", (body.role_id,))
-                if not cur.fetchone():
-                    return _err(404, "Role not found")
+    # Apply only provided fields
+    if body.full_name is not None: user.full_name  = body.full_name.strip()
+    if body.email     is not None: user.email      = str(body.email)
+    if body.phone     is not None: user.phone      = body.phone
+    if body.status    is not None: user.active_ind = (body.status == "active")
+    user.updated_by = current_user["user_id"]
 
-            cur.execute(
-                """
-                UPDATE app_users
-                SET full_name = %s, email = %s, phone = %s,
-                    active_ind = %s, updated_by = %s
-                WHERE id = %s
-                """,
-                (new_name, new_email, new_phone, new_active, current_user["user_id"], member_id),
-            )
+    # Replace role assignment only if role_id was supplied
+    if body.role_id is not None:
+        db.query(AppUserRole).filter(
+            AppUserRole.user_id        == member_id,
+            AppUserRole.organization_id == user.organization_id,
+        ).delete(synchronize_session=False)
 
-            if body.role_id is not None:
-                cur.execute(
-                    "DELETE FROM app_user_roles WHERE user_id = %s AND organization_id = %s",
-                    (member_id, existing["organization_id"]),
-                )
-                cur.execute(
-                    "INSERT INTO app_user_roles (user_id, role_id, organization_id) VALUES (%s, %s, %s)",
-                    (member_id, body.role_id, existing["organization_id"]),
-                )
+        db.add(AppUserRole(
+            user_id=member_id,
+            role_id=body.role_id,
+            organization_id=user.organization_id,
+        ))
 
-            cur.execute(
-                "INSERT INTO audit_logs (actor_id, action, entity_type, entity_id) VALUES (%s, %s, %s, %s)",
-                (current_user["user_id"], "member_patched", "app_user", member_id),
-            )
+    # Audit
+    db.add(AuditLog(
+        actor_id=current_user["user_id"],
+        action="member_patched",
+        entity_type="app_user",
+        entity_id=member_id,
+    ))
 
-            cur.execute(f"{_SELECT} WHERE u.id = %s", (member_id,))
-            updated = cur.fetchone()
-
-    return _resp(200, "Member updated successfully", _fmt(updated))
+    db.flush()
+    row = _member_query(db).filter(AppUser.id == member_id).first()
+    return _resp(200, "Member updated successfully", _fmt(row))
 
 
 # ── STORY 4 — Soft-delete member ─────────────────────────────────────────────
@@ -380,42 +346,36 @@ def partial_update_member(
 def delete_member(
     member_id: int,
     current_user: dict = Depends(require_permission("members", "delete")),
+    db: Session        = Depends(get_orm_session),
 ):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, email FROM app_users WHERE id = %s AND active_ind = 1",
-                (member_id,),
-            )
-            existing = cur.fetchone()
-            if not existing:
-                return _err(404, "Member not found or already inactive")
+    user = db.query(AppUser).filter(
+        AppUser.id        == member_id,
+        AppUser.active_ind == True,
+    ).first()
+    if not user:
+        return _err(404, "Member not found or already inactive")
 
-            # soft-delete: deactivate user
-            cur.execute(
-                "UPDATE app_users SET active_ind = 0, updated_by = %s WHERE id = %s",
-                (current_user["user_id"], member_id),
-            )
+    # Soft-delete: deactivate user record
+    user.active_ind = False
+    user.updated_by = current_user["user_id"]
 
-            # revoke all project memberships
-            cur.execute(
-                "UPDATE project_members SET active_ind = 0 WHERE user_id = %s",
-                (member_id,),
-            )
+    # Revoke all project memberships
+    db.query(ProjectMember).filter(
+        ProjectMember.user_id == member_id,
+    ).update({"active_ind": False}, synchronize_session=False)
 
-            # invalidate all active sessions
-            cur.execute("DELETE FROM app_sessions WHERE user_id = %s", (member_id,))
+    # Invalidate all active sessions
+    db.query(AppSession).filter(
+        AppSession.user_id == member_id,
+    ).delete(synchronize_session=False)
 
-            cur.execute(
-                "INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, old_value) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (
-                    current_user["user_id"],
-                    "member_deleted",
-                    "app_user",
-                    member_id,
-                    json.dumps({"email": existing["email"]}),
-                ),
-            )
+    # Audit
+    db.add(AuditLog(
+        actor_id=current_user["user_id"],
+        action="member_deleted",
+        entity_type="app_user",
+        entity_id=member_id,
+        old_value={"email": user.email},
+    ))
 
     return _resp(200, "Member deactivated successfully", None)
