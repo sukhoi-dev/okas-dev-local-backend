@@ -9,7 +9,8 @@ import uuid
 
 from app.auth import get_current_user
 from app.db import get_orm_session
-from app.models.projects import Project
+from app.models.projects import Project, ProjectManagerHistory, ProjectOwner, ProjectMember
+from app.models.auth import Homeowner, AppUserRole
 from app.models.audit import AuditLog
 
 router = APIRouter(
@@ -34,21 +35,44 @@ def _err(status_code: int, message: str) -> JSONResponse:
 
 # ── validation Schema ────────────────────────────────────────────────────────────────────
 
+class HomeownerInput(BaseModel):
+    email:           str
+    full_name:       Optional[str] = None
+    phone:           Optional[str] = None
+    preferred_login: Optional[str] = "otp"
+
+    @field_validator("email")
+    @classmethod
+    def email_required(cls, v):
+        if not v.strip():
+            raise ValueError("homeowner email cannot be empty")
+        return v.strip().lower()
+
+    @field_validator("preferred_login")
+    @classmethod
+    def valid_login(cls, v):
+        if v and v not in {"google", "otp"}:
+            raise ValueError("preferred_login must be 'google' or 'otp'")
+        return v
+
+
 class ProjectCreate(BaseModel):
-    name:               str
-    organization_id:    int
-    project_type:       str
-    serial_number:      Optional[str] = None
-    status:             Optional[str] = "active"
-    project_manager_id: Optional[int] = None
-    location_id:        Optional[int] = None
-    address:            Optional[str] = None
-    city:               Optional[str] = None
-    state:              Optional[str] = None
-    country:            Optional[str] = None
-    pincode:            Optional[str] = None
-    notes:              Optional[str] = None
-    installed_at:       Optional[datetime] = None
+    name:                    str
+    organization_id:         int
+    project_type:            str
+    homeowner:               HomeownerInput
+    serial_number:           Optional[str] = None
+    status:                  Optional[str] = "active"
+    project_manager_id:      Optional[int] = None
+    location_id:             Optional[int] = None
+    address:                 Optional[str] = None
+    city:                    Optional[str] = None
+    state:                   Optional[str] = None
+    country:                 Optional[str] = None
+    pincode:                 Optional[str] = None
+    notes:                   Optional[str] = None
+    installed_at:            Optional[datetime] = None
+    project_metadata:        Optional[dict] = None
 
     @field_validator("name")
     @classmethod
@@ -91,12 +115,22 @@ def _fmt(p: Project) -> dict:
         "pincode":            p.pincode,
         "notes":              p.notes,
         "installed_at":       p.installed_at.isoformat() if p.installed_at else None,
+        "project_metadata":   p.project_metadata,
         "created_at":         p.created_at.isoformat() if p.created_at else None,
         "updated_at":         p.updated_at.isoformat() if p.updated_at else None,
     }
 
 
 # ── POST /we-okas/projects ────────────────────────────────────────────────────
+
+def _fmt_homeowner(h: Homeowner) -> dict:
+    return {
+        "id":        h.id,
+        "email":     h.email,
+        "full_name": h.full_name,
+        "phone":     h.phone,
+    }
+
 
 @router.post("", status_code=201)
 def create_project(
@@ -117,6 +151,25 @@ def create_project(
         if db.query(Project).filter(Project.serial_number == body.serial_number).first():
             return _err(409, f"Serial number '{body.serial_number}' is already in use")
 
+    # ── 1. Homeowner: find existing or create ─────────────────────────────────
+    hw_in = body.homeowner
+    homeowner = db.query(Homeowner).filter(Homeowner.email == hw_in.email).first()
+    if homeowner is None:
+        homeowner = Homeowner(
+            email           = hw_in.email,
+            full_name       = hw_in.full_name,
+            phone           = hw_in.phone,
+            preferred_login = hw_in.preferred_login or "otp",
+            active_ind      = True,
+        )
+        db.add(homeowner)
+        try:
+            db.flush()
+        except IntegrityError as e:
+            db.rollback()
+            return _err(400, "Failed to create homeowner: " + str(e.orig))
+
+    # ── 2. Project ────────────────────────────────────────────────────────────
     project = Project(
         organization_id    = body.organization_id,
         project_manager_id = body.project_manager_id,
@@ -131,6 +184,8 @@ def create_project(
         country            = body.country,
         pincode            = body.pincode,
         notes              = body.notes,
+        installed_at       = body.installed_at,
+        project_metadata   = body.project_metadata,
         active_ind         = True,
         # updated_by         = current_user["user_id"],
     )
@@ -148,7 +203,50 @@ def create_project(
             return _err(400, f"location_id {body.location_id} does not exist")
         return _err(400, "Database integrity error: " + orig)
 
-    return _resp(201, "Project created successfully", _fmt(project))
+    # ── 3. ProjectOwner: link homeowner as primary owner ──────────────────────
+    db.add(ProjectOwner(
+        project_id   = project.id,
+        homeowner_id = homeowner.id,
+        is_primary   = True,
+        active_ind   = True,
+    ))
+
+    # ── 4. ProjectMember + history: add project manager ───────────────────────
+    if body.project_manager_id:
+        user_role = db.query(AppUserRole).filter(
+            AppUserRole.user_id         == body.project_manager_id,
+            AppUserRole.organization_id == body.organization_id,
+        ).first()
+        if not user_role:
+            return _err(400, f"project_manager_id {body.project_manager_id} has no role in organization {body.organization_id}")
+
+        db.add(ProjectMember(
+            project_id  = project.id,
+            user_id     = body.project_manager_id,
+            role_id     = user_role.role_id,
+            # assigned_by = current_user["user_id"],
+            active_ind  = True,
+        ))
+        db.add(ProjectManagerHistory(
+            project_id  = project.id,
+            user_id     = body.project_manager_id,
+            # assigned_by = current_user["user_id"],
+        ))
+
+    db.add(AuditLog(
+        action          = "project.created",
+        entity_type     = "project",
+        entity_id       = project.id,
+        organization_id = body.organization_id,
+        project_id      = project.id,
+        new_value       = _fmt(project),
+        # actor_id        = current_user["user_id"],
+    ))
+
+    return _resp(201, "Project created successfully", {
+        **_fmt(project),
+        "homeowner": _fmt_homeowner(homeowner),
+    })
 
 
 # ── GET /we-okas/projects ─────────────────────────────────────────────────────
