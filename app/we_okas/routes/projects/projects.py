@@ -326,20 +326,33 @@ def list_projects(
 
 # ── PATCH /we-okas/projects/{project_id} ─────────────────────────────────────
 
+class HomeownerUpdate(BaseModel):
+    email:      Optional[str] = None
+    full_name:  Optional[str] = None
+    phone:      Optional[str] = None
+
+    @field_validator("email")
+    @classmethod
+    def email_strip(cls, v):
+        return v.strip().lower() if v else v
+
+
 class ProjectUpdate(BaseModel):
-    name:               Optional[str] = None
-    project_type:       Optional[str] = None
-    serial_number:      Optional[str] = None
-    status:             Optional[str] = None
-    project_manager_id: Optional[int] = None
-    location_id:        Optional[int] = None
-    address:            Optional[str] = None
-    city:               Optional[str] = None
-    state:              Optional[str] = None
-    country:            Optional[str] = None
-    pincode:            Optional[str] = None
-    notes:              Optional[str] = None
-    installed_at:       Optional[datetime] = None
+    name:               Optional[str]           = None
+    project_type:       Optional[str]           = None
+    serial_number:      Optional[str]           = None
+    status:             Optional[str]           = None
+    project_manager_id: Optional[int]           = None
+    location_id:        Optional[int]           = None
+    address:            Optional[str]           = None
+    city:               Optional[str]           = None
+    state:              Optional[str]           = None
+    country:            Optional[str]           = None
+    pincode:            Optional[str]           = None
+    notes:              Optional[str]           = None
+    installed_at:       Optional[datetime]      = None
+    homeowner:          Optional[HomeownerUpdate] = None
+    project_metadata:   Optional[dict]           = None
 
     @field_validator("name")
     @classmethod
@@ -360,6 +373,16 @@ class ProjectUpdate(BaseModel):
     def valid_status(cls, v):
         if v and v not in _VALID_STATUS:
             raise ValueError(f"status must be one of {sorted(_VALID_STATUS)}")
+        return v
+
+    @field_validator("project_manager_id", mode="before")
+    @classmethod
+    def coerce_manager_id(cls, v):
+        if v is not None:
+            try:
+                return int(v)
+            except (ValueError, TypeError):
+                raise ValueError("project_manager_id must be a valid integer")
         return v
 
 
@@ -392,8 +415,11 @@ def update_project(
             return _err(409, f"Serial number '{body.serial_number}' is already in use")
         project.serial_number = body.serial_number
 
+    old_manager_id = project.project_manager_id
+
     for field in ("project_type", "status", "project_manager_id", "location_id",
-                  "address", "city", "state", "country", "pincode", "notes", "installed_at"):
+                  "address", "city", "state", "country", "pincode", "notes", "installed_at",
+                  "project_metadata"):
         val = getattr(body, field)
         if val is not None:
             setattr(project, field, val)
@@ -409,4 +435,93 @@ def update_project(
             return _err(400, f"location_id {body.location_id} does not exist")
         return _err(400, "Database integrity error: " + orig)
 
-    return _resp(200, "Project updated successfully", _fmt(project))
+    # ── ProjectMember + history when manager changes ──────────────────────────
+    if body.project_manager_id and body.project_manager_id != old_manager_id:
+        user_role = db.query(AppUserRole).filter(
+            AppUserRole.user_id         == body.project_manager_id,
+            AppUserRole.organization_id == project.organization_id,
+        ).first()
+
+        if user_role:
+            # deactivate previous member entry for old manager
+            if old_manager_id:
+                db.query(ProjectMember).filter(
+                    ProjectMember.project_id == project.id,
+                    ProjectMember.user_id    == old_manager_id,
+                    ProjectMember.active_ind == True,
+                ).update({"active_ind": False}, synchronize_session=False)
+
+            db.add(ProjectMember(
+                project_id  = project.id,
+                user_id     = body.project_manager_id,
+                role_id     = user_role.role_id,
+                # assigned_by = current_user["user_id"],
+                active_ind  = True,
+            ))
+
+        db.add(ProjectManagerHistory(
+            project_id  = project.id,
+            user_id     = body.project_manager_id,
+            # assigned_by = current_user["user_id"],
+        ))
+
+    # ── Homeowner update ──────────────────────────────────────────────────────
+    project_owner = db.query(ProjectOwner).filter(
+        ProjectOwner.project_id == project.id,
+        ProjectOwner.is_primary == True,
+        ProjectOwner.active_ind == True,
+    ).first()
+    homeowner = db.query(Homeowner).filter(
+        Homeowner.id == project_owner.homeowner_id
+    ).first() if project_owner else None
+
+    if body.homeowner:
+        hw = body.homeowner
+        if project_owner and homeowner:
+            email_changed = hw.email and hw.email != homeowner.email
+            if email_changed:
+                # email changed — check if new email belongs to another homeowner
+                existing = db.query(Homeowner).filter(Homeowner.email == hw.email).first()
+                if existing and existing.id != homeowner.id:
+                    # reassign ProjectOwner to the existing homeowner with new email
+                    project_owner.homeowner_id = existing.id
+                    homeowner = existing
+                else:
+                    homeowner.email = hw.email
+            if hw.full_name is not None: homeowner.full_name = hw.full_name
+            if hw.phone     is not None: homeowner.phone     = hw.phone
+        else:
+            # no primary owner yet — find by email or create, then link
+            if hw.email:
+                homeowner = db.query(Homeowner).filter(Homeowner.email == hw.email).first()
+                if homeowner is None:
+                    homeowner = Homeowner(
+                        email      = hw.email,
+                        full_name  = hw.full_name,
+                        phone      = hw.phone,
+                        active_ind = True,
+                    )
+                    db.add(homeowner)
+                    db.flush()
+                db.add(ProjectOwner(
+                    project_id   = project.id,
+                    homeowner_id = homeowner.id,
+                    is_primary   = True,
+                    active_ind   = True,
+                ))
+
+    # ── AuditLog ──────────────────────────────────────────────────────────────
+    db.add(AuditLog(
+        action          = "project.updated",
+        entity_type     = "project",
+        entity_id       = project.id,
+        organization_id = project.organization_id,
+        project_id      = project.id,
+        new_value       = _fmt(project),
+        # actor_id        = current_user["user_id"],
+    ))
+
+    return _resp(200, "Project updated successfully", {
+        **_fmt(project),
+        "homeowner": _fmt_homeowner(homeowner) if homeowner else None,
+    })
