@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from typing import Optional
 from datetime import datetime
+from sqlalchemy import and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 import uuid
@@ -58,9 +59,9 @@ class HomeownerInput(BaseModel):
 
 class ProjectCreate(BaseModel):
     name:                    str
-    organization_id:         int
     project_type:            str
     homeowner:               HomeownerInput
+    organization_id:         Optional[int] = None
     serial_number:           Optional[str] = None
     status:                  Optional[str] = "active"
     project_manager_id:      Optional[int] = None
@@ -93,6 +94,16 @@ class ProjectCreate(BaseModel):
     def valid_status(cls, v):
         if v and v not in _VALID_STATUS:
             raise ValueError(f"status must be one of {sorted(_VALID_STATUS)}")
+        return v
+
+    @field_validator("project_manager_id", mode="before")
+    @classmethod
+    def coerce_manager_id(cls, v):
+        if v is not None:
+            try:
+                return int(v)
+            except (ValueError, TypeError):
+                raise ValueError("project_manager_id must be a valid integer")
         return v
 
 
@@ -138,13 +149,17 @@ def create_project(
     # current_user: dict    = Depends(get_current_user),
     db:           Session = Depends(get_orm_session)
 ):
+    # TODO: replace with current_user["organization_id"] once auth is enabled
+    _DEFAULT_ORG_ID = 1
+    organization_id = body.organization_id or _DEFAULT_ORG_ID
+
     # Duplicate name check within the same organization
     if db.query(Project).filter(
         Project.name == body.name,
-        Project.organization_id == body.organization_id,
+        Project.organization_id == organization_id,
         Project.active_ind == True,
     ).first():
-        return _err(409, f"A project named '{body.name}' already exists in this organization")
+        return _err(409, f"A project named '{body.name}' already exists")
 
     # Duplicate serial number check
     if body.serial_number:
@@ -171,7 +186,7 @@ def create_project(
 
     # ── 2. Project ────────────────────────────────────────────────────────────
     project = Project(
-        organization_id    = body.organization_id,
+        organization_id    = organization_id,
         project_manager_id = body.project_manager_id,
         location_id        = body.location_id,
         name               = body.name,
@@ -196,7 +211,7 @@ def create_project(
         db.rollback()
         orig = str(e.orig)
         if "fk_proj_org" in orig or "organization_id" in orig:
-            return _err(400, f"organization_id {body.organization_id} does not exist")
+            return _err(400, f"organization_id {organization_id} does not exist")
         if "fk_proj_manager" in orig or "project_manager_id" in orig:
             return _err(400, f"project_manager_id {body.project_manager_id} does not exist")
         if "fk_proj_location" in orig or "location_id" in orig:
@@ -215,18 +230,18 @@ def create_project(
     if body.project_manager_id:
         user_role = db.query(AppUserRole).filter(
             AppUserRole.user_id         == body.project_manager_id,
-            AppUserRole.organization_id == body.organization_id,
+            AppUserRole.organization_id == organization_id,
         ).first()
-        if not user_role:
-            return _err(400, f"project_manager_id {body.project_manager_id} has no role in organization {body.organization_id}")
 
-        db.add(ProjectMember(
-            project_id  = project.id,
-            user_id     = body.project_manager_id,
-            role_id     = user_role.role_id,
-            # assigned_by = current_user["user_id"],
-            active_ind  = True,
-        ))
+        if user_role:
+            db.add(ProjectMember(
+                project_id  = project.id,
+                user_id     = body.project_manager_id,
+                role_id     = user_role.role_id,
+                # assigned_by = current_user["user_id"],
+                active_ind  = True,
+            ))
+
         db.add(ProjectManagerHistory(
             project_id  = project.id,
             user_id     = body.project_manager_id,
@@ -237,7 +252,7 @@ def create_project(
         action          = "project.created",
         entity_type     = "project",
         entity_id       = project.id,
-        organization_id = body.organization_id,
+        organization_id = organization_id,
         project_id      = project.id,
         new_value       = _fmt(project),
         # actor_id        = current_user["user_id"],
@@ -250,6 +265,30 @@ def create_project(
 
 
 # ── GET /we-okas/projects ─────────────────────────────────────────────────────
+
+def _base_project_query(db: Session):
+    return (
+        db.query(Project, Homeowner)
+        .outerjoin(
+            ProjectOwner,
+            and_(
+                ProjectOwner.project_id == Project.id,
+                ProjectOwner.is_primary == True,
+                ProjectOwner.active_ind == True,
+            ),
+        )
+        .outerjoin(Homeowner, Homeowner.id == ProjectOwner.homeowner_id)
+    )
+
+
+def _fmt_row(row) -> dict:
+    project: Project            = row[0]
+    homeowner: Optional[Homeowner] = row[1]
+    return {
+        **_fmt(project),
+        "owner": _fmt_homeowner(homeowner) if homeowner else None,
+    }
+
 
 @router.get("", status_code=200)
 def list_projects(
@@ -266,7 +305,7 @@ def list_projects(
     if project_type and project_type not in _VALID_TYPES:
         return _err(400, f"project_type must be one of {sorted(_VALID_TYPES)}")
 
-    q = db.query(Project).filter(Project.active_ind == True)
+    q = _base_project_query(db).filter(Project.active_ind == True)
     if organization_id:
         q = q.filter(Project.organization_id == organization_id)
     if status:
@@ -274,14 +313,14 @@ def list_projects(
     if project_type:
         q = q.filter(Project.project_type == project_type)
 
-    total   = q.count()
-    projects = q.order_by(Project.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    total = q.count()
+    rows  = q.order_by(Project.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
 
     return _resp(200, "Projects fetched successfully", {
         "total":     total,
         "page":      page,
         "page_size": page_size,
-        "projects":  [_fmt(p) for p in projects],
+        "projects":  [_fmt_row(r) for r in rows],
     })
 
 
