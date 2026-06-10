@@ -5,17 +5,22 @@ from app.models.base import Base
 
 class Organization(Base):
     __tablename__ = "organizations"
-    id             = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
-    name           = Column(String(255), nullable=False)
-    slug           = Column(String(100), nullable=False, unique=True)
-    email          = Column(String(255))
-    phone          = Column(String(50))
-    address        = Column(Text)
-    logo_url       = Column(String(500))
-    active_ind     = Column(Boolean, nullable=False, default=True)
-    updated_by     = Column(BIGINT(unsigned=True), ForeignKey("app_users.id", use_alter=True, name="fk_org_updated_by"))
-    created_at     = Column(DATETIME(fsp=3), nullable=False, server_default="CURRENT_TIMESTAMP(3)")
-    updated_at     = Column(DATETIME(fsp=3), nullable=False, server_default="CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)")
+    id                     = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
+    org_type               = Column(Enum("distributor", "si"), nullable=False, default="si")
+    parent_organization_id = Column(BIGINT(unsigned=True), ForeignKey("organizations.id", use_alter=True, name="fk_org_parent"))
+    name                   = Column(String(255), nullable=False)
+    contact_name           = Column(String(255))
+    slug                   = Column(String(100), nullable=False, unique=True)
+    email                  = Column(String(255))
+    phone                  = Column(String(50))
+    address                = Column(Text)
+    gst_vat_number         = Column(String(50))
+    logo_url               = Column(String(500))
+    active_ind             = Column(Boolean, nullable=False, default=True)
+    is_archived            = Column(Boolean, nullable=False, default=False)
+    updated_by             = Column(BIGINT(unsigned=True), ForeignKey("app_users.id", use_alter=True, name="fk_org_updated_by"))
+    created_at             = Column(DATETIME(fsp=3), nullable=False, server_default="CURRENT_TIMESTAMP(3)")
+    updated_at             = Column(DATETIME(fsp=3), nullable=False, server_default="CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)")
 
 
 class OrganizationLocation(Base):

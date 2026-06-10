@@ -11,6 +11,7 @@ from app.auth.routes.session import router as auth_session_router
 
 # ── We.OKAS routes ────────────────────────────────────────────────────────
 from app.we_okas.routes.projects import router as we_okas_projects_router
+from app.we_okas.routes.system_integrators import router as we_okas_si_router
 
 # ── Design Studio routes ──────────────────────────────────────────────────
 # (add imports here as design_studio routes are built)
@@ -37,6 +38,7 @@ app.include_router(auth_otp_router)
 app.include_router(auth_google_router)
 app.include_router(auth_session_router)
 app.include_router(we_okas_projects_router)
+app.include_router(we_okas_si_router)
 app.include_router(shared_lookup_router)
 
 
