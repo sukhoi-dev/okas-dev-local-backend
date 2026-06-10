@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # ── We.OKAS routes ────────────────────────────────────────────────────────
 from app.we_okas.routes.projects import router as we_okas_projects_router
+from app.we_okas.routes.system_integrators import router as we_okas_si_router
 
 # ── Design Studio routes ──────────────────────────────────────────────────
 # (add imports here as design_studio routes are built)
@@ -29,6 +30,7 @@ app.add_middleware(
 
 # ── Mount routers ─────────────────────────────────────────────────────────
 app.include_router(we_okas_projects_router)
+app.include_router(we_okas_si_router)
 app.include_router(shared_lookup_router)
 
 

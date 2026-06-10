@@ -6,3 +6,4 @@ email-validator==2.2.0
 sqlalchemy==1.4.50
 alembic==1.13.1
 mako>=1.1.0
+reportlab>=4.0.0
