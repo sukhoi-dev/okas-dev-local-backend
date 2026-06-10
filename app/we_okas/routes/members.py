@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 import uuid
 
-from app.auth import require_permission
+from app.auth import require_permission, hash_password
 from app.db import get_orm_session
 from app.models.auth import AppUser, AppUserRole, Role, RolePermission, AppSession
 from app.models.audit import AuditLog
@@ -46,6 +46,7 @@ class MemberCreate(BaseModel):
     role_id:                 int
     organization_id:         int
     status:                  str            = "active"
+    password:                Optional[str]  = None
     has_design_studio_access: Optional[bool] = None   # informational; derived from role in responses
 
     @validator("full_name")
@@ -59,6 +60,12 @@ class MemberCreate(BaseModel):
     def validate_status(cls, v):
         if v not in ("active", "inactive"):
             raise ValueError("status must be 'active' or 'inactive'")
+        return v
+
+    @validator("password")
+    def validate_password(cls, v):
+        if v is not None and len(v) < 6:
+            raise ValueError("password must be at least 6 characters")
         return v
 
 
@@ -140,9 +147,9 @@ def list_members(
     current_user: dict    = Depends(require_permission("members", "view")),
     db: Session           = Depends(get_orm_session),
 ):
-    q = _member_query(db)
+    org_id = current_user["organization_id"]
+    q = _member_query(db).filter(AppUser.organization_id == org_id)
 
-    # Status filter — default to active only
     if status == "inactive":
         q = q.filter(AppUser.active_ind == False)
     elif status == "all":
@@ -170,7 +177,11 @@ def get_member(
     current_user: dict = Depends(require_permission("members", "view")),
     db: Session        = Depends(get_orm_session),
 ):
-    row = _member_query(db).filter(AppUser.id == member_id).first()
+    org_id = current_user["organization_id"]
+    row = _member_query(db).filter(
+        AppUser.id == member_id,
+        AppUser.organization_id == org_id,
+    ).first()
     if not row:
         return _err(404, "Member not found")
     return _resp(200, "Member retrieved successfully", _fmt(row))
@@ -184,6 +195,8 @@ def create_member(
     current_user: dict = Depends(require_permission("members", "create")),
     db: Session        = Depends(get_orm_session),
 ):
+    org_id = current_user["organization_id"]
+
     # Validate: email uniqueness
     if db.query(AppUser).filter(AppUser.email == str(body.email)).first():
         return _err(409, "Email address is already registered")
@@ -192,13 +205,14 @@ def create_member(
     if not db.query(Role).filter(Role.id == body.role_id).first():
         return _err(404, "Role not found")
 
-    # Create user
+    # Create user scoped to the caller's organisation
     user = AppUser(
-        organization_id=body.organization_id,
+        organization_id=org_id,
         full_name=body.full_name,
         email=str(body.email),
         phone=body.phone,
         active_ind=(body.status == "active"),
+        password_hash=hash_password(body.password) if body.password else None,
     )
     db.add(user)
     db.flush()   # get user.id before related inserts
@@ -207,7 +221,7 @@ def create_member(
     db.add(AppUserRole(
         user_id=user.id,
         role_id=body.role_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     ))
 
     # Audit
@@ -233,7 +247,11 @@ def update_member(
     current_user: dict = Depends(require_permission("members", "edit")),
     db: Session        = Depends(get_orm_session),
 ):
-    user = db.query(AppUser).filter(AppUser.id == member_id).first()
+    org_id = current_user["organization_id"]
+    user = db.query(AppUser).filter(
+        AppUser.id == member_id,
+        AppUser.organization_id == org_id,
+    ).first()
     if not user:
         return _err(404, "Member not found")
 
@@ -249,24 +267,23 @@ def update_member(
     if not db.query(Role).filter(Role.id == body.role_id).first():
         return _err(404, "Role not found")
 
-    # Update user fields
-    user.full_name       = body.full_name
-    user.email           = str(body.email)
-    user.phone           = body.phone
-    user.organization_id = body.organization_id
-    user.active_ind      = (body.status == "active")
-    user.updated_by      = current_user["user_id"]
+    # Update user fields (organisation_id is always the caller's org — never reassigned)
+    user.full_name  = body.full_name
+    user.email      = str(body.email)
+    user.phone      = body.phone
+    user.active_ind = (body.status == "active")
+    user.updated_by = current_user["user_id"]
 
     # Replace role assignment within the organisation
     db.query(AppUserRole).filter(
-        AppUserRole.user_id        == member_id,
-        AppUserRole.organization_id == body.organization_id,
+        AppUserRole.user_id         == member_id,
+        AppUserRole.organization_id == org_id,
     ).delete(synchronize_session=False)
 
     db.add(AppUserRole(
         user_id=member_id,
         role_id=body.role_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     ))
 
     # Audit
@@ -290,7 +307,11 @@ def partial_update_member(
     current_user: dict = Depends(require_permission("members", "edit")),
     db: Session        = Depends(get_orm_session),
 ):
-    user = db.query(AppUser).filter(AppUser.id == member_id).first()
+    org_id = current_user["organization_id"]
+    user = db.query(AppUser).filter(
+        AppUser.id == member_id,
+        AppUser.organization_id == org_id,
+    ).first()
     if not user:
         return _err(404, "Member not found")
 
@@ -317,14 +338,14 @@ def partial_update_member(
     # Replace role assignment only if role_id was supplied
     if body.role_id is not None:
         db.query(AppUserRole).filter(
-            AppUserRole.user_id        == member_id,
-            AppUserRole.organization_id == user.organization_id,
+            AppUserRole.user_id         == member_id,
+            AppUserRole.organization_id == org_id,
         ).delete(synchronize_session=False)
 
         db.add(AppUserRole(
             user_id=member_id,
             role_id=body.role_id,
-            organization_id=user.organization_id,
+            organization_id=org_id,
         ))
 
     # Audit
@@ -348,9 +369,11 @@ def delete_member(
     current_user: dict = Depends(require_permission("members", "delete")),
     db: Session        = Depends(get_orm_session),
 ):
+    org_id = current_user["organization_id"]
     user = db.query(AppUser).filter(
-        AppUser.id        == member_id,
-        AppUser.active_ind == True,
+        AppUser.id              == member_id,
+        AppUser.organization_id == org_id,
+        AppUser.active_ind      == True,
     ).first()
     if not user:
         return _err(404, "Member not found or already inactive")

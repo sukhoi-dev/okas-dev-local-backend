@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 # ── We.OKAS routes ────────────────────────────────────────────────────────
 from app.we_okas.routes.auth import router as we_okas_auth_router
 from app.we_okas.routes.members import router as we_okas_members_router
+from app.we_okas.routes.organizations import router as we_okas_orgs_router
 from app.we_okas.routes.projects import router as we_okas_projects_router
 from app.we_okas.routes.roles import router as we_okas_roles_router
 
@@ -64,6 +65,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # ── Mount routers ─────────────────────────────────────────────────────────
 app.include_router(we_okas_auth_router)
 app.include_router(we_okas_members_router)
+app.include_router(we_okas_orgs_router)
 app.include_router(we_okas_projects_router)
 app.include_router(we_okas_roles_router)
 app.include_router(shared_lookup_router)

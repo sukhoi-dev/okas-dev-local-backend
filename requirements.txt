@@ -7,3 +7,4 @@ sqlalchemy==1.4.50
 alembic==1.13.1
 mako>=1.1.0
 PyJWT==2.9.0
+bcrypt==4.2.1
