@@ -15,6 +15,7 @@ branch_labels = None
 depends_on = None
 
 
+
 def _exec(sql: str) -> None:
     op.execute(sql.strip())
 

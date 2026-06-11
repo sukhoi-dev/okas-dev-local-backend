@@ -1,5 +1,6 @@
 .env
 .venv/
+venv
 __pycache__/
 *.pyc
 *.pyo
@@ -7,5 +8,4 @@ __pycache__/
 .DS_Store
 *.log
 mysql_setup.sh
-
-venv/
+okasfrontend
