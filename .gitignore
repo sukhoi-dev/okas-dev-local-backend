@@ -1,4 +1,5 @@
 .env
+backend/.env
 .venv/
 __pycache__/
 *.pyc
@@ -8,4 +9,6 @@ __pycache__/
 *.log
 mysql_setup.sh
 venv
+backend/venv
 okasfrontend
+desginstudiofrontend
