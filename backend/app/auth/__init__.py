@@ -57,15 +57,11 @@ def get_current_user(
 
 def require_permission(feature: str, action: str):
     """
-    Dependency factory — validates JWT *and* checks that the user's role
-    has `is_allowed = TRUE` for the given feature/action combination.
-    Returns the current_user dict on success, raises 403 otherwise.
-
-    Usage:
-        current_user: dict = Depends(require_permission("members", "view"))
+    Dependency factory — validates JWT and checks that the user's role
+    has is_allowed = TRUE for the given feature/action combination.
     """
     def _checker(current_user: dict = Depends(get_current_user)) -> dict:
-        from app.db import get_db          # local import avoids circular-import at module load
+        from app.db import get_db
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(

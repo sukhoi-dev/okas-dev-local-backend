@@ -44,6 +44,7 @@ def upgrade() -> None:
         ("support_tickets",           "support_tickets_ah",           "updated_by"),
         ("config_exports",            "config_exports_ah",            "updated_by"),
     ]:
+        _exec(f"DROP TRIGGER IF EXISTS trg_{src}_ai")
         _exec(f"""
         CREATE TRIGGER trg_{src}_ai
         AFTER INSERT ON {src} FOR EACH ROW
@@ -51,6 +52,7 @@ def upgrade() -> None:
           VALUES ('INSERT', NEW.{by_col}, NOW(3))
         """)
 
+        _exec(f"DROP TRIGGER IF EXISTS trg_{src}_au")
         _exec(f"""
         CREATE TRIGGER trg_{src}_au
         AFTER UPDATE ON {src} FOR EACH ROW
@@ -58,6 +60,7 @@ def upgrade() -> None:
           VALUES ('UPDATE', NEW.{by_col}, NOW(3))
         """)
 
+        _exec(f"DROP TRIGGER IF EXISTS trg_{src}_ad")
         _exec(f"""
         CREATE TRIGGER trg_{src}_ad
         AFTER DELETE ON {src} FOR EACH ROW

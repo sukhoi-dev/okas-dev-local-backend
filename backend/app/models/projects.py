@@ -83,3 +83,4 @@ class ProjectSubscription(Base):
     updated_by    = Column(BIGINT(unsigned=True), ForeignKey("app_users.id"))
     created_at    = Column(DATETIME(fsp=3), nullable=False, server_default="CURRENT_TIMESTAMP(3)")
     updated_at    = Column(DATETIME(fsp=3), nullable=False, server_default="CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)")
+

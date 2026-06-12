@@ -88,3 +88,27 @@ VALUES
 -- ── Project Owners ────────────────────────────────────────────────────────────
 INSERT IGNORE INTO project_owners (project_id, homeowner_id, is_primary)
 VALUES (1, 1, 1), (2, 2, 1);
+
+-- ── Distributor setup ─────────────────────────────────────────────────────
+-- Distributor organization
+INSERT IGNORE INTO organizations (id, org_type, name, slug, email, phone)
+VALUES (2, 'distributor', 'Super Distributor Co.', 'super-distributor', 'superadmin@mail.com', '+91-9800000000');
+-- Ensure org_type is set correctly if row already exists
+UPDATE organizations SET org_type = 'distributor' WHERE id = 2;
+
+-- Distributor role
+INSERT IGNORE INTO roles (id, name, description)
+VALUES (1, 'distributor', 'Distributor who manages system integrators');
+
+-- Distributor user  (login: superadmin@mail.com)
+INSERT IGNORE INTO app_users (id, organization_id, email, full_name)
+VALUES (3, 2, 'superadmin@mail.com', 'Super Admin');
+
+-- Link user to distributor role
+INSERT IGNORE INTO app_user_roles (user_id, role_id, organization_id)
+VALUES (3, 1, 2);
+
+-- Dev session token — hardcoded for easy testing
+-- Use in requests: Authorization: Bearer dist-dev-token-001
+INSERT IGNORE INTO app_sessions (user_id, token_hash, expires_at)
+VALUES (3, 'dist-dev-token-001', '2030-01-01 00:00:00.000');
