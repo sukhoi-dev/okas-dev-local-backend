@@ -9,6 +9,7 @@ from app.models.base import get_session
 from app.core.security import generate_otp, hash_value, generate_session_token
 from app.core.email import send_otp_email
 from app.core.audit import write_session_audit
+from app.auth import create_access_token
 
 router = APIRouter(prefix="/auth/otp", tags=["auth | otp"], redirect_slashes=False)
 
@@ -91,11 +92,11 @@ def send_otp(body: OtpSendRequest, db: Session = Depends(get_session)):
     db.execute(
         text("""
             UPDATE app_otp_codes
-            SET used_at = NOW(3)
+            SET used_at = UTC_TIMESTAMP(3)
             WHERE phone_or_email = :email
               AND purpose = 'login'
               AND used_at IS NULL
-              AND expires_at > NOW(3)
+              AND expires_at > UTC_TIMESTAMP(3)
         """),
         {"email": body.email},
     )
@@ -159,7 +160,7 @@ def verify_otp(body: OtpVerifyRequest, request: Request, db: Session = Depends(g
 
     # Mark OTP used
     db.execute(
-        text("UPDATE app_otp_codes SET used_at = NOW(3) WHERE id = :id"),
+        text("UPDATE app_otp_codes SET used_at = UTC_TIMESTAMP(3) WHERE id = :id"),
         {"id": otp_record["id"]},
     )
 
@@ -176,7 +177,7 @@ def verify_otp(body: OtpVerifyRequest, request: Request, db: Session = Depends(g
     db.execute(
         text("""
             INSERT INTO app_sessions (user_id, token_hash, ip_address, expires_at, last_active_at)
-            VALUES (:user_id, :token_hash, :ip, :expires_at, NOW(3))
+            VALUES (:user_id, :token_hash, :ip, :expires_at, UTC_TIMESTAMP(3))
         """),
         {
             "user_id":    user["id"],
@@ -201,11 +202,14 @@ def verify_otp(body: OtpVerifyRequest, request: Request, db: Session = Depends(g
         org_id=user.get("organization_id"),
     )
 
+    access_token = create_access_token(user)
+
     return {
-        "success":    True,
-        "token":      raw_token,
-        "expires_at": expires_at.isoformat(),
-        "user_type":  user_type,
+        "success":      True,
+        "token":        raw_token,
+        "access_token": access_token,
+        "expires_at":   expires_at.isoformat(),
+        "user_type":    user_type,
         "user": {
             "id":              user["id"],
             "full_name":       user["full_name"],
