@@ -15,6 +15,7 @@ from app.auth.routes.session import router as auth_session_router
 # ── We.OKAS routes ────────────────────────────────────────────────────────
 from app.we_okas.routes.auth import router as we_okas_auth_router
 from app.we_okas.routes.members import router as we_okas_members_router
+from app.we_okas.routes.organizations import router as we_okas_orgs_router
 from app.we_okas.routes.projects import router as we_okas_projects_router
 from app.we_okas.routes.roles import router as we_okas_roles_router
 from app.we_okas.routes.system_integrators import router as we_okas_si_router
@@ -77,6 +78,7 @@ app.include_router(auth_google_router)
 app.include_router(auth_session_router)
 app.include_router(we_okas_auth_router)
 app.include_router(we_okas_members_router)
+app.include_router(we_okas_orgs_router)
 app.include_router(we_okas_projects_router)
 app.include_router(we_okas_roles_router)
 app.include_router(we_okas_si_router)

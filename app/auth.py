@@ -2,6 +2,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import bcrypt
 import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -11,6 +12,17 @@ _ALGO   = "HS256"
 _TTL_H  = int(os.getenv("JWT_EXPIRY_HOURS", "24"))
 
 _bearer = HTTPBearer(auto_error=False)
+
+
+def hash_password(plaintext: str) -> str:
+    return bcrypt.hashpw(plaintext.encode(), bcrypt.gensalt(rounds=12)).decode()
+
+
+def verify_password(plaintext: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(plaintext.encode(), hashed.encode())
+    except Exception:
+        return False
 
 
 def create_access_token(user: dict) -> str:
