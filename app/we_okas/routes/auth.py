@@ -8,7 +8,7 @@ from pydantic import BaseModel, EmailStr
 from app.auth import create_access_token, _TTL_H
 from app.db import get_db
 
-router = APIRouter(prefix="/we-okas/auth", tags=["we-okas | auth"], redirect_slashes=False)
+router = APIRouter(prefix="/api/we-okas/auth", tags=["we-okas | auth"], redirect_slashes=False)
 
 _JWT_TTL_SECONDS = _TTL_H * 3600
 

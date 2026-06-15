@@ -10,7 +10,7 @@ from app.models.base import get_session
 from app.core.security import generate_session_token, hash_value
 from app.core.audit import write_session_audit
 
-router = APIRouter(prefix="/auth/google", tags=["auth | google"], redirect_slashes=False)
+router = APIRouter(prefix="/api/auth/google", tags=["auth | google"], redirect_slashes=False)
 
 _SESSION_EXPIRY_DAYS = 30
 _GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"

@@ -36,7 +36,7 @@ def get_current_user(
 
     # Check expiry inside the DB to avoid timezone skew
     still_valid = db.execute(
-        text("SELECT expires_at > UTC_TIMESTAMP() AS valid FROM app_sessions WHERE id = :id"),
+        text("SELECT expires_at > NOW() AS valid FROM app_sessions WHERE id = :id"),
         {"id": session_row["id"]},
     ).mappings().fetchone()
 

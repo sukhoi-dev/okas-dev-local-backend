@@ -6,7 +6,7 @@ from app.models.base import get_session
 from app.core.session import get_current_user
 from app.core.audit import write_session_audit
 
-router = APIRouter(prefix="/auth", tags=["auth | session"], redirect_slashes=False)
+router = APIRouter(prefix="/api/auth", tags=["auth | session"], redirect_slashes=False)
 
 
 # ── GET /auth/me ──────────────────────────────────────────────────────────────

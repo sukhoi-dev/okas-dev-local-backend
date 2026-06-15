@@ -12,7 +12,7 @@ from app.models.auth import AppUser, AppUserRole, Role, RolePermission
 from app.models.audit import AuditLog
 
 router = APIRouter(
-    prefix="/we-okas/roles",
+    prefix="/api/we-okas/roles",
     tags=["we-okas | roles"],
     redirect_slashes=False,
     dependencies=[Depends(get_current_user)],

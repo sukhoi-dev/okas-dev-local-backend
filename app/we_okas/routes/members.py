@@ -13,7 +13,7 @@ from app.models.audit import AuditLog
 from app.models.projects import ProjectMember
 
 router = APIRouter(
-    prefix="/we-okas/members",
+    prefix="/api/we-okas/members",
     tags=["we-okas | members"],
     redirect_slashes=False,
 )

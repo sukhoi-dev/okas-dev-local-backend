@@ -20,8 +20,6 @@ def create_access_token(user: dict) -> str:
         "user_id":         user["id"],
         "full_name":       user.get("full_name") or "",
         "organization_id": user["organization_id"],
-        "role":            user.get("role"),
-        "org_type":        user.get("org_type"),
         "iat":             now,
         "exp":             now + timedelta(hours=_TTL_H),
     }
@@ -46,8 +44,16 @@ def get_current_user(
 
 
 def require_permission(feature: str, action: str):
+    """
+    Dependency factory — validates JWT *and* checks that the user's role
+    has `is_allowed = TRUE` for the given feature/action combination.
+    Returns the current_user dict on success, raises 403 otherwise.
+
+    Usage:
+        current_user: dict = Depends(require_permission("members", "view"))
+    """
     def _checker(current_user: dict = Depends(get_current_user)) -> dict:
-        from app.db import get_db
+        from app.db import get_db          # local import avoids circular-import at module load
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
