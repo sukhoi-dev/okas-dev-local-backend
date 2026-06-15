@@ -140,7 +140,7 @@ def list_members(
     current_user: dict    = Depends(require_permission("members", "view")),
     db: Session           = Depends(get_orm_session),
 ):
-    q = _member_query(db)
+    q = _member_query(db).filter(AppUser.organization_id == current_user["organization_id"])
 
     # Status filter — default to active only
     if status == "inactive":
@@ -170,7 +170,10 @@ def get_member(
     current_user: dict = Depends(require_permission("members", "view")),
     db: Session        = Depends(get_orm_session),
 ):
-    row = _member_query(db).filter(AppUser.id == member_id).first()
+    row = _member_query(db).filter(
+        AppUser.id == member_id,
+        AppUser.organization_id == current_user["organization_id"],
+    ).first()
     if not row:
         return _err(404, "Member not found")
     return _resp(200, "Member retrieved successfully", _fmt(row))

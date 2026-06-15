@@ -60,10 +60,18 @@ class DesignStudioPermission(BaseModel):
     access: bool = False
 
 
+class SystemIntegratorsPermission(BaseModel):
+    create: bool = False
+    view:   bool = False
+    edit:   bool = False
+    delete: bool = False
+
+
 class PermissionsBody(BaseModel):
-    projects:      Optional[ProjectsPermission]      = None
-    members:       Optional[MembersPermission]       = None
-    design_studio: Optional[DesignStudioPermission]  = None
+    projects:           Optional[ProjectsPermission]           = None
+    members:            Optional[MembersPermission]            = None
+    design_studio:      Optional[DesignStudioPermission]       = None
+    system_integrators: Optional[SystemIntegratorsPermission]  = None
 
 
 class RoleCreate(BaseModel):
@@ -88,6 +96,11 @@ class RoleCreate(BaseModel):
         if v.members and any([v.members.create, v.members.view, v.members.edit, v.members.delete]):
             has_any = True
         if v.design_studio and v.design_studio.access:
+            has_any = True
+        if v.system_integrators and any([
+            v.system_integrators.create, v.system_integrators.view,
+            v.system_integrators.edit, v.system_integrators.delete,
+        ]):
             has_any = True
         if not has_any:
             raise ValueError("permissions must include at least one module with a valid value")
@@ -120,9 +133,10 @@ class ReassignBody(BaseModel):
 def _build_permissions(perms: List[RolePermission]) -> dict:
     """Reconstruct the structured permissions dict from ORM RolePermission objects."""
     result = {
-        "projects":      {"scope": "none"},
-        "members":       {"create": False, "view": False, "edit": False, "delete": False},
-        "design_studio": {"access": False},
+        "projects":           {"scope": "none"},
+        "members":            {"create": False, "view": False, "edit": False, "delete": False},
+        "design_studio":      {"access": False},
+        "system_integrators": {"create": False, "view": False, "edit": False, "delete": False},
     }
     for p in perms:
         feature, action, allowed = p.feature, p.action, bool(p.is_allowed)
@@ -132,6 +146,8 @@ def _build_permissions(perms: List[RolePermission]) -> dict:
             result["members"][action] = allowed
         elif feature == "design_studio" and action == "access":
             result["design_studio"]["access"] = allowed
+        elif feature == "system_integrators" and action in result["system_integrators"]:
+            result["system_integrators"][action] = allowed
     return result
 
 
@@ -153,6 +169,12 @@ def _permissions_to_models(role_id: int, permissions: PermissionsBody) -> List[R
             role_id=role_id, feature="design_studio",
             action="access", is_allowed=permissions.design_studio.access,
         ))
+    if permissions.system_integrators:
+        for action in ("create", "view", "edit", "delete"):
+            models.append(RolePermission(
+                role_id=role_id, feature="system_integrators",
+                action=action, is_allowed=getattr(permissions.system_integrators, action),
+            ))
     return models
 
 
@@ -182,20 +204,38 @@ def _fetch_role(db: Session, role_id: int) -> Optional[dict]:
 @router.get("")
 def list_roles(
     search: Optional[str] = Query(None),
+    current_user: dict    = Depends(get_current_user),
     db: Session           = Depends(get_orm_session),
 ):
-    # Member count per role via subquery — avoids N+1
+    org_id = current_user["organization_id"]
+
+    # Member count per role scoped to this org
     mc_subq = (
         db.query(
             AppUserRole.role_id.label("role_id"),
             func.count(AppUserRole.id).label("cnt"),
         )
+        .filter(AppUserRole.organization_id == org_id)
         .group_by(AppUserRole.role_id)
         .subquery("mc")
     )
 
+    # Role IDs assigned to any user in this org (system/global roles)
+    org_role_ids_subq = (
+        db.query(AppUserRole.role_id)
+        .filter(AppUserRole.organization_id == org_id)
+        .distinct()
+        .subquery("org_role_ids")
+    )
+
+    # Return roles that either belong to this org OR are assigned to org users
+    from sqlalchemy import or_
     q = (
         db.query(Role, func.coalesce(mc_subq.c.cnt, 0).label("member_count"))
+        .filter(or_(
+            Role.organization_id == org_id,
+            Role.id.in_(org_role_ids_subq),
+        ))
         .outerjoin(mc_subq, mc_subq.c.role_id == Role.id)
     )
 
@@ -223,15 +263,17 @@ def list_roles(
 @router.get("/{role_id}/members")
 def get_role_members(
     role_id: int,
-    db: Session = Depends(get_orm_session),
+    current_user: dict = Depends(get_current_user),
+    db: Session        = Depends(get_orm_session),
 ):
+    org_id = current_user["organization_id"]
     if not db.query(Role).filter(Role.id == role_id).first():
         return _err(404, "Role not found")
 
     rows = (
         db.query(AppUserRole, AppUser)
         .join(AppUser, AppUser.id == AppUserRole.user_id)
-        .filter(AppUserRole.role_id == role_id)
+        .filter(AppUserRole.role_id == role_id, AppUserRole.organization_id == org_id)
         .order_by(AppUser.full_name)
         .all()
     )
@@ -252,8 +294,17 @@ def get_role_members(
 @router.get("/{role_id}")
 def get_role(
     role_id: int,
-    db: Session = Depends(get_orm_session),
+    current_user: dict = Depends(get_current_user),
+    db: Session        = Depends(get_orm_session),
 ):
+    org_id = current_user["organization_id"]
+    # Verify this role belongs to the caller's org
+    owns = db.query(AppUserRole).filter(
+        AppUserRole.role_id == role_id,
+        AppUserRole.organization_id == org_id,
+    ).first()
+    if not owns:
+        return _err(404, "Role not found")
     role = _fetch_role(db, role_id)
     if not role:
         return _err(404, "Role not found")
@@ -265,13 +316,20 @@ def get_role(
 @router.post("", status_code=201)
 def create_role(
     body: RoleCreate,
-    db: Session = Depends(get_orm_session),
+    current_user: dict = Depends(get_current_user),
+    db: Session        = Depends(get_orm_session),
 ):
-    # Name uniqueness
-    if db.query(Role).filter(Role.name == body.name).first():
+    org_id = current_user["organization_id"]
+
+    # Name uniqueness within this org (allow same name across different orgs)
+    from sqlalchemy import or_
+    if db.query(Role).filter(
+        Role.name == body.name,
+        or_(Role.organization_id == org_id, Role.organization_id.is_(None)),
+    ).first():
         return _err(409, "Role name already exists")
 
-    role = Role(name=body.name, description=body.description)
+    role = Role(name=body.name, description=body.description, organization_id=org_id)
     db.add(role)
     db.flush()   # populate role.id
 
@@ -295,15 +353,22 @@ def create_role(
 def update_role(
     role_id: int,
     body: RoleCreate,
-    db: Session = Depends(get_orm_session),
+    current_user: dict = Depends(get_current_user),
+    db: Session        = Depends(get_orm_session),
 ):
+    org_id = current_user["organization_id"]
     role = db.query(Role).filter(Role.id == role_id).first()
     if not role:
         return _err(404, "Role not found")
 
-    # Name uniqueness (skip if unchanged)
+    # Name uniqueness within org (skip if unchanged)
+    from sqlalchemy import or_
     if body.name != role.name:
-        if db.query(Role).filter(Role.name == body.name, Role.id != role_id).first():
+        if db.query(Role).filter(
+            Role.name == body.name,
+            Role.id != role_id,
+            or_(Role.organization_id == org_id, Role.organization_id.is_(None)),
+        ).first():
             return _err(409, "Role name already exists")
 
     role.name        = body.name
