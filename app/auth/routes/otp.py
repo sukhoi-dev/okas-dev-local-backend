@@ -9,8 +9,9 @@ from app.models.base import get_session
 from app.core.security import generate_otp, hash_value, generate_session_token
 from app.core.email import send_otp_email
 from app.core.audit import write_session_audit
+from app.auth import create_access_token
 
-router = APIRouter(prefix="/auth/otp", tags=["auth | otp"], redirect_slashes=False)
+router = APIRouter(prefix="/api/auth/otp", tags=["auth | otp"], redirect_slashes=False)
 
 _OTP_EXPIRY_MINUTES = 10
 _SESSION_EXPIRY_DAYS = 30
@@ -31,25 +32,22 @@ class OtpVerifyRequest(BaseModel):
 # ── Internal helper ───────────────────────────────────────────────────────────
 
 def _resolve_user(db: Session, email: str) -> tuple:
-    """
-    Returns (app_user dict, user_type str).
-    user_type is 'si_distributor' if email also exists in organizations, else 'member'.
-    Raises 404 if email not in app_users, 403 if account is inactive.
-    """
-    user = db.execute(
+    row = db.execute(
         text("""
-            SELECT id, full_name, email, phone, organization_id, active_ind
-            FROM app_users
-            WHERE email = :email
+            SELECT u.id, u.full_name, u.email, u.phone, u.organization_id, u.active_ind,
+                   o.org_type
+            FROM app_users u
+            JOIN organizations o ON o.id = u.organization_id
+            WHERE u.email = :email
             LIMIT 1
         """),
         {"email": email},
     ).mappings().fetchone()
 
-    if not user:
+    if not row:
         raise HTTPException(status_code=404, detail="Email not registered")
 
-    if not user["active_ind"]:
+    if not row["active_ind"]:
         raise HTTPException(status_code=403, detail="Account is inactive")
 
     user     = dict(row)
@@ -75,32 +73,25 @@ def _resolve_user(db: Session, email: str) -> tuple:
         {"user_id": user["id"]},
     ).mappings().fetchone()
 
-    user_dict = dict(user)
-    user_dict["role"] = role_row["name"] if role_row else None
-    return user_dict, user_type
+    user["role"]     = role_row["name"] if role_row else None
+    user["org_type"] = org_type
+    return user, user_type
 
 
-# ── POST /auth/otp/send ───────────────────────────────────────────────────────
+# ── POST /api/auth/otp/send ───────────────────────────────────────────────────
 
 @router.post("/send")
 def send_otp(body: OtpSendRequest, db: Session = Depends(get_session)):
-    """
-    Step 1 — request an OTP.
-    Checks app_users for the email, determines user_type, generates a
-    6-digit OTP, stores its hash in app_otp_codes, and sends it via email.
-    Any previous unused OTP for this email is invalidated.
-    """
     _, user_type = _resolve_user(db, body.email)
 
-    # Invalidate any previous unused OTPs for this email
     db.execute(
         text("""
             UPDATE app_otp_codes
-            SET used_at = NOW(3)
+            SET used_at = UTC_TIMESTAMP(3)
             WHERE phone_or_email = :email
               AND purpose = 'login'
               AND used_at IS NULL
-              AND expires_at > NOW(3)
+              AND expires_at > UTC_TIMESTAMP(3)
         """),
         {"email": body.email},
     )
@@ -122,21 +113,16 @@ def send_otp(body: OtpSendRequest, db: Session = Depends(get_session)):
         raise HTTPException(status_code=502, detail=f"Failed to send OTP email: {exc}")
 
     return {
-        "success": True,
-        "message": "OTP sent to email",
+        "success":   True,
+        "message":   "OTP sent to email",
         "user_type": user_type,
     }
 
 
-# ── POST /auth/otp/verify ─────────────────────────────────────────────────────
+# ── POST /api/auth/otp/verify ─────────────────────────────────────────────────
 
 @router.post("/verify")
 def verify_otp(body: OtpVerifyRequest, request: Request, db: Session = Depends(get_session)):
-    """
-    Step 2 — verify OTP and issue a session token.
-    Validates the OTP, marks it used, creates a row in app_sessions,
-    and returns the raw session token along with the resolved user_type.
-    """
     user, user_type = _resolve_user(db, body.email)
 
     otp_record = db.execute(
@@ -162,13 +148,11 @@ def verify_otp(body: OtpVerifyRequest, request: Request, db: Session = Depends(g
     if otp_record["code_hash"] != hash_value(body.otp):
         raise HTTPException(status_code=400, detail="Invalid OTP")
 
-    # Mark OTP used
     db.execute(
-        text("UPDATE app_otp_codes SET used_at = NOW(3) WHERE id = :id"),
+        text("UPDATE app_otp_codes SET used_at = UTC_TIMESTAMP(3) WHERE id = :id"),
         {"id": otp_record["id"]},
     )
 
-    # Create session
     raw_token  = generate_session_token()
     token_hash = hash_value(raw_token)
     expires_at = (
@@ -181,7 +165,7 @@ def verify_otp(body: OtpVerifyRequest, request: Request, db: Session = Depends(g
     db.execute(
         text("""
             INSERT INTO app_sessions (user_id, token_hash, ip_address, expires_at, last_active_at)
-            VALUES (:user_id, :token_hash, :ip, :expires_at, NOW(3))
+            VALUES (:user_id, :token_hash, :ip, :expires_at, UTC_TIMESTAMP(3))
         """),
         {
             "user_id":    user["id"],
@@ -206,11 +190,14 @@ def verify_otp(body: OtpVerifyRequest, request: Request, db: Session = Depends(g
         org_id=user.get("organization_id"),
     )
 
+    access_token = create_access_token(user)
+
     return {
-        "success":    True,
-        "token":      raw_token,
-        "expires_at": expires_at.isoformat(),
-        "user_type":  user_type,
+        "success":      True,
+        "token":        raw_token,
+        "access_token": access_token,
+        "expires_at":   expires_at.isoformat(),
+        "user_type":    user_type,
         "user": {
             "id":              user["id"],
             "full_name":       user["full_name"],
@@ -218,5 +205,6 @@ def verify_otp(body: OtpVerifyRequest, request: Request, db: Session = Depends(g
             "phone":           user["phone"],
             "organization_id": user["organization_id"],
             "role":            user["role"],
+            "org_type":        user["org_type"],
         },
     }

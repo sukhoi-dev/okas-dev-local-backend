@@ -3,6 +3,25 @@ import pymysql
 import pymysql.cursors
 from contextlib import contextmanager
 
+# ── SQLAlchemy ORM session (FastAPI Depends) ──────────────────────────────────
+from app.models.base import SessionLocal
+
+
+def get_orm_session():
+    """
+    FastAPI dependency — yields a SQLAlchemy Session with auto-commit and
+    auto-rollback.  Use as:  db: Session = Depends(get_orm_session)
+    """
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
 _DB_CONFIG = {
     "host":     os.getenv("DB_HOST", "127.0.0.1"),
     "port":     int(os.getenv("DB_PORT", "3306")),

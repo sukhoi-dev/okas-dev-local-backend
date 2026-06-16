@@ -1,0 +1,66 @@
+{
+  "_readme": "Test credentials for distributed login. Run 'python scripts/seed_demo.py' to seed all users into the DB.",
+  "users": [
+    {
+      "tier": "platform",
+      "description": "Super Admin — OKAS platform operator. Can add / manage all Service Integrator organisations. Sees the System Integrators menu.",
+      "email": "superadmin@mail.com",
+      "password": "SuperAdmin@123",
+      "role": "Super Admin",
+      "organization": "OKAS Platform",
+      "permissions": [
+        "organizations.manage",
+        "members.view",
+        "members.create",
+        "members.edit",
+        "members.delete",
+        "projects.view",
+        "projects.create",
+        "design_studio.access"
+      ]
+    },
+    {
+      "tier": "si",
+      "description": "SI Admin — full access within OKAS Demo Systems. Does NOT see the System Integrators menu.",
+      "email": "admin@okas-demo.com",
+      "password": "Admin@123",
+      "role": "Admin",
+      "organization": "OKAS Demo Systems",
+      "permissions": [
+        "members.view",
+        "members.create",
+        "members.edit",
+        "members.delete",
+        "projects.view",
+        "projects.create",
+        "design_studio.access"
+      ]
+    },
+    {
+      "tier": "si",
+      "description": "SI Project Manager — can view members and manage own projects. No member write access.",
+      "email": "pm@okas-demo.com",
+      "password": "PM@123",
+      "role": "Project Manager",
+      "organization": "OKAS Demo Systems",
+      "permissions": [
+        "members.view",
+        "projects.view",
+        "projects.create",
+        "design_studio.access"
+      ]
+    },
+    {
+      "tier": "si",
+      "description": "SI Viewer — read-only access to members and projects.",
+      "email": "viewer@okas-demo.com",
+      "password": "Viewer@123",
+      "role": "Viewer",
+      "organization": "OKAS Demo Systems",
+      "permissions": [
+        "members.view",
+        "projects.view"
+      ]
+    }
+  ]
+}
