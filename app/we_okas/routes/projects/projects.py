@@ -15,7 +15,7 @@ from app.models.auth import Homeowner, AppUserRole
 from app.models.audit import AuditLog
 
 router = APIRouter(
-    prefix="/we-okas/projects",
+    prefix="/api/we-okas/projects",
     tags=["we-okas | projects"],
     redirect_slashes=False,
 )
@@ -146,7 +146,7 @@ def _fmt_homeowner(h: Homeowner) -> dict:
 @router.post("", status_code=201)
 def create_project(
     body:         ProjectCreate,
-    # current_user: dict    = Depends(get_current_user),
+    current_user: dict    = Depends(get_current_user),
     db:           Session = Depends(get_orm_session)
 ):
     # TODO: replace with current_user["organization_id"] once auth is enabled
@@ -202,7 +202,7 @@ def create_project(
         installed_at       = body.installed_at,
         project_metadata   = body.project_metadata,
         active_ind         = True,
-        # updated_by         = current_user["user_id"],
+        updated_by         = current_user["user_id"],
     )
     db.add(project)
     try:
@@ -238,14 +238,14 @@ def create_project(
                 project_id  = project.id,
                 user_id     = body.project_manager_id,
                 role_id     = user_role.role_id,
-                # assigned_by = current_user["user_id"],
+                assigned_by = current_user["user_id"],
                 active_ind  = True,
             ))
 
         db.add(ProjectManagerHistory(
             project_id  = project.id,
             user_id     = body.project_manager_id,
-            # assigned_by = current_user["user_id"],
+            assigned_by = current_user["user_id"],
         ))
 
     db.add(AuditLog(
@@ -255,7 +255,7 @@ def create_project(
         organization_id = organization_id,
         project_id      = project.id,
         new_value       = _fmt(project),
-        # actor_id        = current_user["user_id"],
+        actor_id        = current_user["user_id"],
     ))
 
     return _resp(201, "Project created successfully", {
@@ -292,22 +292,24 @@ def _fmt_row(row) -> dict:
 
 @router.get("", status_code=200)
 def list_projects(
-    organization_id: Optional[int] = Query(None),
-    status:          Optional[str] = Query(None),
-    project_type:    Optional[str] = Query(None),
-    page:            int           = Query(1, ge=1),
-    page_size:       int           = Query(20, ge=1, le=100),
-    # current_user: dict = Depends(get_current_user),
-    db:              Session       = Depends(get_orm_session),
+    status:       Optional[str] = Query(None),
+    project_type: Optional[str] = Query(None),
+    page:         int           = Query(1, ge=1),
+    page_size:    int           = Query(20, ge=1, le=100),
+    current_user: dict          = Depends(get_current_user),
+    db:           Session       = Depends(get_orm_session),
 ):
     if status and status not in _VALID_STATUS:
         return _err(400, f"status must be one of {sorted(_VALID_STATUS)}")
     if project_type and project_type not in _VALID_TYPES:
         return _err(400, f"project_type must be one of {sorted(_VALID_TYPES)}")
 
-    q = _base_project_query(db).filter(Project.active_ind == True)
-    if organization_id:
-        q = q.filter(Project.organization_id == organization_id)
+    organization_id = current_user["organization_id"]
+
+    q = _base_project_query(db).filter(
+        Project.active_ind == True,
+        Project.organization_id == organization_id,
+    )
     if status:
         q = q.filter(Project.status == status)
     if project_type:
@@ -390,7 +392,7 @@ class ProjectUpdate(BaseModel):
 def update_project(
     project_id: int,
     body:       ProjectUpdate,
-    # current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db:         Session = Depends(get_orm_session),
 ):
     project = db.query(Project).filter(Project.id == project_id, Project.active_ind == True).first()
@@ -455,14 +457,14 @@ def update_project(
                 project_id  = project.id,
                 user_id     = body.project_manager_id,
                 role_id     = user_role.role_id,
-                # assigned_by = current_user["user_id"],
+                assigned_by = current_user["user_id"],
                 active_ind  = True,
             ))
 
         db.add(ProjectManagerHistory(
             project_id  = project.id,
             user_id     = body.project_manager_id,
-            # assigned_by = current_user["user_id"],
+            assigned_by = current_user["user_id"],
         ))
 
     # ── Homeowner update ──────────────────────────────────────────────────────
@@ -518,7 +520,7 @@ def update_project(
         organization_id = project.organization_id,
         project_id      = project.id,
         new_value       = _fmt(project),
-        # actor_id        = current_user["user_id"],
+        actor_id        = current_user["user_id"],
     ))
 
     return _resp(200, "Project updated successfully", {
