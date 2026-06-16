@@ -52,12 +52,17 @@ def _resolve_user(db: Session, email: str) -> tuple:
     if not user["active_ind"]:
         raise HTTPException(status_code=403, detail="Account is inactive")
 
-    org = db.execute(
-        text("SELECT id FROM organizations WHERE email = :email AND active_ind = 1 LIMIT 1"),
-        {"email": email},
-    ).mappings().fetchone()
+    user     = dict(row)
+    org_type = row["org_type"]
 
-    user_type = "si_distributor" if org else "member"
+    org_email_row = db.execute(
+        text("SELECT 1 FROM organizations WHERE email = :email LIMIT 1"),
+        {"email": email},
+    ).fetchone()
+    if not org_email_row:
+        org_type = "member"
+
+    user_type = "si_distributor" if org_type in ("distributor", "si") else "member"
 
     role_row = db.execute(
         text("""
