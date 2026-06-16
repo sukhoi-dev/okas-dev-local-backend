@@ -310,6 +310,10 @@ def list_projects(
         Project.active_ind == True,
         Project.organization_id == organization_id,
     )
+
+    if current_user.get("org_type") == "member":
+        q = q.filter(Project.project_manager_id == current_user["user_id"])
+
     if status:
         q = q.filter(Project.status == status)
     if project_type:
