@@ -220,18 +220,20 @@ def create_si(
     db.add(user)
     db.flush()
 
-    # 3. Assign 'si' role
-    si_role = db.execute(
-        text("SELECT id FROM roles WHERE name = 'si' LIMIT 1")
-    ).fetchone()
-    if si_role:
-        db.execute(
-            text("""
-                INSERT IGNORE INTO app_user_roles (user_id, role_id, organization_id)
-                VALUES (:user_id, :role_id, :org_id)
-            """),
-            {"user_id": user.id, "role_id": si_role.id, "org_id": org.id},
-        )
+    # 3. Ensure SI role (id=2) exists, then assign it
+    db.execute(
+        text("""
+            INSERT IGNORE INTO roles (id, name, description)
+            VALUES (2, 'si', 'System Integrator admin')
+        """)
+    )
+    db.execute(
+        text("""
+            INSERT IGNORE INTO app_user_roles (user_id, role_id, organization_id)
+            VALUES (:user_id, 2, :org_id)
+        """),
+        {"user_id": user.id, "org_id": org.id},
+    )
 
     row = db.execute(
         text(f"{_DETAIL_SQL} WHERE o.id = :id"),
