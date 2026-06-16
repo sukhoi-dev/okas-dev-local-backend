@@ -52,6 +52,14 @@ def _resolve_user(db: Session, email: str) -> tuple:
 
     user     = dict(row)
     org_type = row["org_type"]
+
+    org_email_row = db.execute(
+        text("SELECT 1 FROM organizations WHERE email = :email LIMIT 1"),
+        {"email": email},
+    ).fetchone()
+    if not org_email_row:
+        org_type = "member"
+
     user_type = "si_distributor" if org_type in ("distributor", "si") else "member"
 
     role_row = db.execute(
