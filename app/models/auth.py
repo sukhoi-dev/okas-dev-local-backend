@@ -50,7 +50,6 @@ class AppUser(Base):
     full_name       = Column(String(255))
     avatar_url      = Column(String(500))
     google_id       = Column(String(255), unique=True)
-    password_hash   = Column(String(255))
     active_ind      = Column(Boolean, nullable=False, default=True)
     last_login_at   = Column(DATETIME(fsp=3))
     updated_by      = Column(BIGINT(unsigned=True), ForeignKey("app_users.id"))

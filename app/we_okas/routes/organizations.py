@@ -9,7 +9,7 @@ from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.auth import require_permission, hash_password
+from app.auth import require_permission
 from app.db import get_orm_session
 from app.models.auth import AppUser, AppUserRole, Organization, Role
 
@@ -27,7 +27,6 @@ router = APIRouter(
 class AdminUserCreate(BaseModel):
     full_name: str
     email:     EmailStr
-    password:  str
 
     @field_validator("full_name")
     @classmethod
@@ -35,13 +34,6 @@ class AdminUserCreate(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("full_name cannot be empty")
-        return v
-
-    @field_validator("password")
-    @classmethod
-    def validate_password(cls, v):
-        if len(v) < 6:
-            raise ValueError("password must be at least 6 characters")
         return v
 
 
@@ -118,7 +110,6 @@ def _insert_admin_user(db: Session, org_id: int, admin: AdminUserCreate) -> dict
         organization_id=org_id,
         email=str(admin.email),
         full_name=admin.full_name.strip(),
-        password_hash=hash_password(admin.password),
         active_ind=True,
     )
     db.add(user)

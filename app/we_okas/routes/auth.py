@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
 
-from app.auth import create_access_token, get_current_user, hash_password, verify_password, _TTL_H
+from app.auth import create_access_token, get_current_user, _TTL_H
 from app.db import get_db
 
 router = APIRouter(prefix="/api/we-okas/auth", tags=["we-okas | auth"], redirect_slashes=False)
@@ -24,11 +24,6 @@ def _resp(status_code: int, message: str, body=None) -> dict:
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-
 class TokenRequest(BaseModel):
     email: EmailStr
 
@@ -41,7 +36,7 @@ def _fetch_user_with_context(conn, email: str) -> Optional[dict]:
         cur.execute(
             """
             SELECT u.id, u.email, u.full_name, u.organization_id,
-                   u.password_hash, u.active_ind,
+                   u.active_ind,
                    r.id   AS role_id,
                    r.name AS role_name,
                    o.name AS org_name,
@@ -98,37 +93,6 @@ def _build_login_response(user: dict) -> dict:
             },
         },
     )
-
-
-# ── POST /we-okas/auth/login  (email + password) ─────────────────────────────
-
-@router.post("/login")
-def login(body: LoginRequest):
-    """
-    Authenticate with email + password.
-    Returns a JWT, full user profile, and flat permissions list.
-    """
-    with get_db() as conn:
-        user = _fetch_user_with_context(conn, body.email)
-        if not user:
-            return JSONResponse(
-                status_code=401,
-                content=_resp(401, "Invalid email or password", None),
-            )
-
-        if not user["active_ind"]:
-            return JSONResponse(
-                status_code=403,
-                content=_resp(403, "Account is inactive. Contact your administrator.", None),
-            )
-
-        if not user["password_hash"] or not verify_password(body.password, user["password_hash"]):
-            return JSONResponse(
-                status_code=401,
-                content=_resp(401, "Invalid email or password", None),
-            )
-
-    return _build_login_response(user)
 
 
 # ── GET /we-okas/auth/me  (current user + permissions) ───────────────────────
