@@ -344,6 +344,25 @@ def list_projects(
     })
 
 
+# ── GET /we-okas/projects/{project_id} ───────────────────────────────────────
+
+@router.get("/{project_id}", status_code=200)
+def get_project(
+    project_id:   int,
+    current_user: dict    = Depends(get_current_user),
+    db:           Session = Depends(get_orm_session),
+):
+    row = _base_project_query(db).filter(
+        Project.id         == project_id,
+        Project.active_ind == True,
+    ).first()
+
+    if not row:
+        return _err(404, f"Project {project_id} not found")
+
+    return _resp(200, "Project fetched successfully", _fmt_row(row))
+
+
 # ── PATCH /we-okas/projects/{project_id} ─────────────────────────────────────
 
 class HomeownerUpdate(BaseModel):
