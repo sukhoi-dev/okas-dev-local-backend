@@ -11,7 +11,7 @@ import uuid
 from app.auth import get_current_user
 from app.db import get_orm_session
 from app.models.projects import Project, ProjectManagerHistory, ProjectOwner, ProjectMember
-from app.models.auth import Homeowner, AppUserRole
+from app.models.auth import Homeowner, AppUserRole, Organization
 from app.models.audit import AuditLog
 
 router = APIRouter(
@@ -305,14 +305,28 @@ def list_projects(
         return _err(400, f"project_type must be one of {sorted(_VALID_TYPES)}")
 
     organization_id = current_user["organization_id"]
+    org_type = current_user.get("org_type")
 
-    q = _base_project_query(db).filter(
-        Project.active_ind == True,
-        Project.organization_id == organization_id,
-    )
-
-    if current_user.get("org_type") == "member":
-        q = q.filter(Project.project_manager_id == current_user["user_id"])
+    if org_type == "distributor":
+        si_org_ids = [
+            row.id for row in db.query(Organization.id).filter(
+                Organization.parent_organization_id == organization_id,
+                Organization.org_type == "si",
+                Organization.active_ind == True,
+            ).all()
+        ]
+        visible_org_ids = si_org_ids + [organization_id]
+        q = _base_project_query(db).filter(
+            Project.active_ind == True,
+            Project.organization_id.in_(visible_org_ids),
+        )
+    else:
+        q = _base_project_query(db).filter(
+            Project.active_ind == True,
+            Project.organization_id == organization_id,
+        )
+        if org_type == "member":
+            q = q.filter(Project.project_manager_id == current_user["user_id"])
 
     if status:
         q = q.filter(Project.status == status)
