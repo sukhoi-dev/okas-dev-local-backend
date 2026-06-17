@@ -11,7 +11,7 @@ import uuid
 from app.auth import get_current_user
 from app.db import get_orm_session
 from app.models.projects import Project, ProjectManagerHistory, ProjectOwner, ProjectMember
-from app.models.auth import Homeowner, AppUserRole
+from app.models.auth import Homeowner, AppUserRole, Organization
 from app.models.audit import AuditLog
 
 router = APIRouter(
@@ -305,14 +305,28 @@ def list_projects(
         return _err(400, f"project_type must be one of {sorted(_VALID_TYPES)}")
 
     organization_id = current_user["organization_id"]
+    org_type = current_user.get("org_type")
 
-    q = _base_project_query(db).filter(
-        Project.active_ind == True,
-        Project.organization_id == organization_id,
-    )
-
-    if current_user.get("org_type") == "member":
-        q = q.filter(Project.project_manager_id == current_user["user_id"])
+    if org_type == "distributor":
+        si_org_ids = [
+            row.id for row in db.query(Organization.id).filter(
+                Organization.parent_organization_id == organization_id,
+                Organization.org_type == "si",
+                Organization.active_ind == True,
+            ).all()
+        ]
+        visible_org_ids = si_org_ids + [organization_id]
+        q = _base_project_query(db).filter(
+            Project.active_ind == True,
+            Project.organization_id.in_(visible_org_ids),
+        )
+    else:
+        q = _base_project_query(db).filter(
+            Project.active_ind == True,
+            Project.organization_id == organization_id,
+        )
+        if org_type == "member":
+            q = q.filter(Project.project_manager_id == current_user["user_id"])
 
     if status:
         q = q.filter(Project.status == status)
@@ -328,6 +342,25 @@ def list_projects(
         "page_size": page_size,
         "projects":  [_fmt_row(r) for r in rows],
     })
+
+
+# ── GET /we-okas/projects/{project_id} ───────────────────────────────────────
+
+@router.get("/{project_id}", status_code=200)
+def get_project(
+    project_id:   int,
+    current_user: dict    = Depends(get_current_user),
+    db:           Session = Depends(get_orm_session),
+):
+    row = _base_project_query(db).filter(
+        Project.id         == project_id,
+        Project.active_ind == True,
+    ).first()
+
+    if not row:
+        return _err(404, f"Project {project_id} not found")
+
+    return _resp(200, "Project fetched successfully", _fmt_row(row))
 
 
 # ── PATCH /we-okas/projects/{project_id} ─────────────────────────────────────
@@ -429,6 +462,8 @@ def update_project(
         val = getattr(body, field)
         if val is not None:
             setattr(project, field, val)
+
+    project.updated_by = current_user["user_id"]
 
     try:
         db.flush()
