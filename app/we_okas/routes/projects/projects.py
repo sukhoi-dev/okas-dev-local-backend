@@ -444,6 +444,8 @@ def update_project(
         if val is not None:
             setattr(project, field, val)
 
+    project.updated_by = current_user["user_id"]
+
     try:
         db.flush()
     except IntegrityError as e:
