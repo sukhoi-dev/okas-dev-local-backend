@@ -11,7 +11,7 @@ import uuid
 from app.auth import get_current_user
 from app.db import get_orm_session
 from app.models.projects import Project, ProjectManagerHistory, ProjectOwner, ProjectMember
-from app.models.auth import Homeowner, AppUserRole, Organization
+from app.models.auth import Homeowner, AppUserRole, Organization, AppUser
 from app.models.audit import AuditLog
 
 router = APIRouter(
@@ -268,7 +268,7 @@ def create_project(
 
 def _base_project_query(db: Session):
     return (
-        db.query(Project, Homeowner)
+        db.query(Project, Homeowner, AppUser)
         .outerjoin(
             ProjectOwner,
             and_(
@@ -278,15 +278,21 @@ def _base_project_query(db: Session):
             ),
         )
         .outerjoin(Homeowner, Homeowner.id == ProjectOwner.homeowner_id)
+        .outerjoin(AppUser, AppUser.id == Project.project_manager_id)
     )
 
 
 def _fmt_row(row) -> dict:
-    project: Project            = row[0]
+    project: Project               = row[0]
     homeowner: Optional[Homeowner] = row[1]
+    manager: Optional[AppUser]     = row[2]
     return {
         **_fmt(project),
         "owner": _fmt_homeowner(homeowner) if homeowner else None,
+        "assigned_member": {
+            "id":        manager.id,
+            "full_name": manager.full_name,
+        } if manager else None,
     }
 
 
@@ -352,11 +358,30 @@ def get_project(
     current_user: dict    = Depends(get_current_user),
     db:           Session = Depends(get_orm_session),
 ):
-    row = _base_project_query(db).filter(
+    organization_id = current_user["organization_id"]
+    org_type        = current_user.get("org_type")
+
+    q = _base_project_query(db).filter(
         Project.id         == project_id,
         Project.active_ind == True,
-    ).first()
+    )
 
+    if org_type == "distributor":
+        si_org_ids = [
+            row.id for row in db.query(Organization.id).filter(
+                Organization.parent_organization_id == organization_id,
+                Organization.org_type == "si",
+                Organization.active_ind == True,
+            ).all()
+        ]
+        visible_org_ids = si_org_ids + [organization_id]
+        q = q.filter(Project.organization_id.in_(visible_org_ids))
+    else:
+        q = q.filter(Project.organization_id == organization_id)
+        if org_type == "member":
+            q = q.filter(Project.project_manager_id == current_user["user_id"])
+
+    row = q.first()
     if not row:
         return _err(404, f"Project {project_id} not found")
 
