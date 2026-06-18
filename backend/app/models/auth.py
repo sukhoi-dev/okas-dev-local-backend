@@ -50,7 +50,6 @@ class AppUser(Base):
     full_name       = Column(String(255))
     avatar_url      = Column(String(500))
     google_id       = Column(String(255), unique=True)
-    password_hash   = Column(String(255))
     active_ind      = Column(Boolean, nullable=False, default=True)
     last_login_at   = Column(DATETIME(fsp=3))
     updated_by      = Column(BIGINT(unsigned=True), ForeignKey("app_users.id"))
@@ -60,10 +59,11 @@ class AppUser(Base):
 
 class Role(Base):
     __tablename__ = "roles"
-    id          = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
-    name        = Column(String(50), nullable=False, unique=True)
-    description = Column(Text)
-    created_at  = Column(DATETIME(fsp=3), nullable=False, server_default="CURRENT_TIMESTAMP(3)")
+    id              = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
+    organization_id = Column(BIGINT(unsigned=True), ForeignKey("organizations.id"), nullable=True)
+    name            = Column(String(50), nullable=False)
+    description     = Column(Text)
+    created_at      = Column(DATETIME(fsp=3), nullable=False, server_default="CURRENT_TIMESTAMP(3)")
 
 
 class AppUserRole(Base):

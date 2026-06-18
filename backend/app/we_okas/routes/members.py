@@ -6,14 +6,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 import uuid
 
-from app.auth import require_permission, hash_password
+from app.auth import require_permission
 from app.db import get_orm_session
 from app.models.auth import AppUser, AppUserRole, Role, RolePermission, AppSession
 from app.models.audit import AuditLog
 from app.models.projects import ProjectMember
 
 router = APIRouter(
-    prefix="/we-okas/members",
+    prefix="/api/we-okas/members",
     tags=["we-okas | members"],
     redirect_slashes=False,
 )
@@ -46,7 +46,6 @@ class MemberCreate(BaseModel):
     role_id:                 int
     organization_id:         int
     status:                  str            = "active"
-    password:                Optional[str]  = None
     has_design_studio_access: Optional[bool] = None   # informational; derived from role in responses
 
     @validator("full_name")
@@ -60,12 +59,6 @@ class MemberCreate(BaseModel):
     def validate_status(cls, v):
         if v not in ("active", "inactive"):
             raise ValueError("status must be 'active' or 'inactive'")
-        return v
-
-    @validator("password")
-    def validate_password(cls, v):
-        if v is not None and len(v) < 6:
-            raise ValueError("password must be at least 6 characters")
         return v
 
 
@@ -212,7 +205,6 @@ def create_member(
         email=str(body.email),
         phone=body.phone,
         active_ind=(body.status == "active"),
-        password_hash=hash_password(body.password) if body.password else None,
     )
     db.add(user)
     db.flush()   # get user.id before related inserts

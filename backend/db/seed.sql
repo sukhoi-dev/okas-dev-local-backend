@@ -4,7 +4,7 @@
 --
 -- Safe to re-run: INSERT IGNORE on explicit IDs skips existing rows.
 
-USE okas_signature;
+USE okascloud;
 
 -- ── Organization ──────────────────────────────────────────────────────────────
 INSERT IGNORE INTO organizations (id, name, slug, email, phone)
@@ -100,15 +100,15 @@ UPDATE organizations SET org_type = 'distributor' WHERE id = 2;
 INSERT IGNORE INTO roles (id, name, description)
 VALUES (1, 'distributor', 'Distributor who manages system integrators');
 
--- Distributor user  (login: superadmin@mail.com)
-INSERT IGNORE INTO app_users (id, organization_id, email, full_name)
-VALUES (3, 2, 'superadmin@mail.com', 'Super Admin');
+-- SI role
+INSERT IGNORE INTO roles (id, name, description)
+VALUES (4, 'si', 'System integrator managed by a distributor');
+
+-- Distributor user  (login: sumit@vyom.ai via OTP)
+INSERT INTO app_users (id, organization_id, email, full_name)
+VALUES (3, 2, 'sumit@vyom.ai', 'Sumit')
+ON DUPLICATE KEY UPDATE email = 'sumit@vyom.ai', full_name = 'Sumit';
 
 -- Link user to distributor role
 INSERT IGNORE INTO app_user_roles (user_id, role_id, organization_id)
 VALUES (3, 1, 2);
-
--- Dev session token — hardcoded for easy testing
--- Use in requests: Authorization: Bearer dist-dev-token-001
-INSERT IGNORE INTO app_sessions (user_id, token_hash, expires_at)
-VALUES (3, 'dist-dev-token-001', '2030-01-01 00:00:00.000');

@@ -7,7 +7,7 @@ from sqlalchemy import text
 from app.models.base import get_session
 from app.models.projects import Project, ProjectOwner, ProjectMember, ProjectManagerHistory
 
-router = APIRouter(prefix="/we-okas/projects", tags=["we-okas | projects"], redirect_slashes=False)
+router = APIRouter(prefix="/api/we-okas/projects", tags=["we-okas | projects"], redirect_slashes=False)
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
