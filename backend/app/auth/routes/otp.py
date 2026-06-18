@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -117,10 +118,12 @@ def send_otp(body: OtpSendRequest, db: Session = Depends(get_session)):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to send OTP email: {exc}")
 
+    dev_mode = not (os.getenv("SMTP_HOST") and os.getenv("SMTP_USER"))
     return {
-        "success": True,
-        "message": "OTP sent to email",
+        "success":   True,
+        "message":   "OTP sent to email" if not dev_mode else "DEV: OTP not emailed — see dev_otp",
         "user_type": user_type,
+        **({"dev_otp": otp} if dev_mode else {}),
     }
 
 

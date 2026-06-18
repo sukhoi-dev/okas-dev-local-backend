@@ -1,5 +1,6 @@
 import requests as http
 from datetime import datetime, timedelta
+from typing import Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -44,7 +45,7 @@ def _verify_google_token(access_token: str) -> dict:
     }
 
 
-def _get_user_type_and_role(db: Session, user_id: int, email: str) -> tuple[str, str | None]:
+def _get_user_type_and_role(db: Session, user_id: int, email: str) -> Tuple[str, Optional[str]]:
     org = db.execute(
         text("SELECT id FROM organizations WHERE email = :email AND active_ind = 1 LIMIT 1"),
         {"email": email},
@@ -68,9 +69,9 @@ def _get_user_type_and_role(db: Session, user_id: int, email: str) -> tuple[str,
 def _create_session(
     db: Session,
     user_id: int,
-    ip_address: str | None,
+    ip_address: Optional[str],
     keep_logged_in: bool = False,
-) -> tuple[str, datetime]:
+) -> Tuple[str, datetime]:
     raw_token  = generate_session_token()
     token_hash = hash_value(raw_token)
     expires_at = (

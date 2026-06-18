@@ -1,5 +1,7 @@
+import os
 from dotenv import load_dotenv
-load_dotenv()
+_env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
+load_dotenv(_env_path, override=True)
 
 import uuid
 from fastapi import FastAPI, HTTPException, Request
@@ -88,3 +90,4 @@ app.include_router(shared_lookup_router)
 @app.get("/health", tags=["meta"])
 def health():
     return {"status": "ok", "service": "okas-cloud-backend"}
+
