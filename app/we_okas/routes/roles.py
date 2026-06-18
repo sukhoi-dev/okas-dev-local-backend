@@ -228,13 +228,13 @@ def list_roles(
         .subquery("org_role_ids")
     )
 
-    # Return roles that either belong to this org OR are assigned to org users
+    # Return roles that belong to this org OR are system-wide (organization_id IS NULL)
     from sqlalchemy import or_
     q = (
         db.query(Role, func.coalesce(mc_subq.c.cnt, 0).label("member_count"))
         .filter(or_(
             Role.organization_id == org_id,
-            Role.id.in_(org_role_ids_subq),
+            Role.organization_id.is_(None),
         ))
         .outerjoin(mc_subq, mc_subq.c.role_id == Role.id)
     )
