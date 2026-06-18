@@ -243,6 +243,7 @@ def list_roles(
         like = f"%{search}%"
         q = q.filter(Role.name.ilike(like) | Role.description.ilike(like))
 
+    q = q.filter(Role.name.notin_(['distributor', 'si']))
     role_rows = q.order_by(Role.created_at.desc()).all()
 
     # Fetch all permissions in one query, then group by role_id

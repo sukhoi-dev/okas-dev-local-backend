@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, validator
 from typing import Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_, or_
 import uuid
 
 from app.auth import require_permission
@@ -142,6 +142,7 @@ def list_members(
 ):
     org_id = current_user["organization_id"]
     q = _member_query(db).filter(AppUser.organization_id == org_id)
+    q = q.filter(or_(Role.name != 'distributor', Role.name == None))
 
     if status == "inactive":
         q = q.filter(AppUser.active_ind == False)
