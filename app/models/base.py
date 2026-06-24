@@ -1,0 +1,34 @@
+import os
+from pathlib import Path
+from urllib.parse import quote_plus
+from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
+DATABASE_URL = (
+    "mysql+pymysql://"
+    f"{os.getenv('DB_USER', 'okasdev')}:{quote_plus(os.getenv('DB_PASSWORD', ''))}"
+    f"@{os.getenv('DB_HOST', '127.0.0.1')}:{os.getenv('DB_PORT', '3307')}"
+    f"/{os.getenv('DB_NAME', 'okascloud')}"
+    "?charset=utf8mb4"
+)
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+Base = declarative_base()
+
+
+def get_session():
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()

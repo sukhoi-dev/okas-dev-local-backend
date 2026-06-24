@@ -1,8 +1,13 @@
 .env
 .venv/
+venv
 __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
 .DS_Store
 *.log
+mysql_setup.sh
+okasfrontend
+alembic.ini
+alembic/
