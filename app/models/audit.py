@@ -8,17 +8,18 @@ _AH_COLS = ("ah_id", "ah_operation", "ah_changed_at", "ah_changed_by")
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id              = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
-    actor_id        = Column(BIGINT(unsigned=True))
-    actor_role      = Column(String(50))
+    # actor_id        = Column(BIGINT(unsigned=True))   # not in live DB
+    # actor_role      = Column(String(50))              # not in live DB
+    user_id         = Column(BIGINT(unsigned=True))
     action          = Column(String(100), nullable=False)
     entity_type     = Column(String(50))
     entity_id       = Column(BIGINT(unsigned=True))
     organization_id = Column(BIGINT(unsigned=True))
     project_id      = Column(BIGINT(unsigned=True))
-    ip_address      = Column(String(45))
-    user_agent      = Column(Text)
     old_value       = Column(JSON)
     new_value       = Column(JSON)
+    ip_address      = Column(String(45))
+    user_agent      = Column(Text)
     created_at      = Column(DATETIME(fsp=3), nullable=False, server_default="CURRENT_TIMESTAMP(3)")
 
 

@@ -56,8 +56,8 @@ def require_permission(feature: str, action: str):
                     FROM app_user_roles aur
                     JOIN role_permissions rp ON rp.role_id = aur.role_id
                     WHERE aur.user_id = %s
-                      AND rp.feature  = %s
-                      AND rp.action   = %s
+                      AND rp.feature_key  = %s
+                      AND rp.action_key   = %s
                     LIMIT 1
                     """,
                     (current_user["user_id"], feature, action),

@@ -29,7 +29,7 @@ def get_permissions(current_user: dict = Depends(jwt_get_current_user)):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT rp.feature, rp.action, rp.is_allowed
+                SELECT rp.feature_key, rp.action_key, rp.is_allowed
                 FROM app_user_roles aur
                 JOIN role_permissions rp ON rp.role_id = aur.role_id
                 WHERE aur.user_id = %s
@@ -41,8 +41,8 @@ def get_permissions(current_user: dict = Depends(jwt_get_current_user)):
     flat = []
     grouped = {}
     for row in rows:
-        feature   = row["feature"]
-        action    = row["action"]
+        feature   = row["feature_key"]
+        action    = row["action_key"]
         is_allowed = bool(row["is_allowed"])
         grouped.setdefault(feature, {})[action] = is_allowed
         if is_allowed:
@@ -69,8 +69,7 @@ def logout(
 
     write_session_audit(
         db=db,
-        actor_id=user["id"],
-        actor_role=user["role"],
+        user_id=user["id"],
         action="session.logout",
         session_id=session_id,
         ip_address=current["ip_address"],

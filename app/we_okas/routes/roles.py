@@ -183,7 +183,6 @@ def _fmt_role(role: Role, perms: List[RolePermission], member_count: int) -> dic
         "id":           role.id,
         "name":         role.name,
         "description":  role.description,
-        "created_at":   role.created_at.isoformat() if role.created_at else None,
         "member_count": member_count,
         "permissions":  _build_permissions(perms),
     }
@@ -228,14 +227,8 @@ def list_roles(
         .subquery("org_role_ids")
     )
 
-    # Return roles that belong to this org OR are system-wide (organization_id IS NULL)
-    from sqlalchemy import or_
     q = (
         db.query(Role, func.coalesce(mc_subq.c.cnt, 0).label("member_count"))
-        .filter(or_(
-            Role.organization_id == org_id,
-            Role.organization_id.is_(None),
-        ))
         .outerjoin(mc_subq, mc_subq.c.role_id == Role.id)
     )
 
@@ -244,7 +237,7 @@ def list_roles(
         q = q.filter(Role.name.ilike(like) | Role.description.ilike(like))
 
     q = q.filter(Role.name.notin_(['distributor', 'si']))
-    role_rows = q.order_by(Role.created_at.desc()).all()
+    role_rows = q.order_by(Role.id.desc()).all()
 
     # Fetch all permissions in one query, then group by role_id
     role_ids  = [r.id for r, _ in role_rows]
@@ -322,15 +315,11 @@ def create_role(
 ):
     org_id = current_user["organization_id"]
 
-    # Name uniqueness within this org (allow same name across different orgs)
-    from sqlalchemy import or_
-    if db.query(Role).filter(
-        Role.name == body.name,
-        or_(Role.organization_id == org_id, Role.organization_id.is_(None)),
-    ).first():
+    # Name uniqueness
+    if db.query(Role).filter(Role.name == body.name).first():
         return _err(409, "Role name already exists")
 
-    role = Role(name=body.name, description=body.description, organization_id=org_id)
+    role = Role(name=body.name, display_name=body.name, description=body.description)
     db.add(role)
     db.flush()   # populate role.id
 
@@ -362,18 +351,17 @@ def update_role(
     if not role:
         return _err(404, "Role not found")
 
-    # Name uniqueness within org (skip if unchanged)
-    from sqlalchemy import or_
+    # Name uniqueness (skip if unchanged)
     if body.name != role.name:
         if db.query(Role).filter(
             Role.name == body.name,
             Role.id != role_id,
-            or_(Role.organization_id == org_id, Role.organization_id.is_(None)),
         ).first():
             return _err(409, "Role name already exists")
 
-    role.name        = body.name
-    role.description = body.description
+    role.name         = body.name
+    role.display_name = body.name
+    role.description  = body.description
 
     # Replace all permissions
     db.query(RolePermission).filter(RolePermission.role_id == role_id).delete(synchronize_session=False)

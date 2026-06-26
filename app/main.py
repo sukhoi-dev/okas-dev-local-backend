@@ -26,6 +26,12 @@ from app.we_okas.routes.system_integrators import router as we_okas_si_router
 # ── Shared API routes ─────────────────────────────────────────────────────
 from app.shared_api.routes.lookup import router as shared_lookup_router
 
+# ── Legacy / flat routes (ci/ecs-auto-deploy) ─────────────────────────────
+from app.routes.projects import router as routes_projects_router
+from app.routes.users import router as routes_users_router
+from app.routes.admin import router as routes_admin_router
+from app.routes.auth import router as routes_auth_router
+
 app = FastAPI(
     title="OKAS Cloud API",
     description="Backend API for the OKAS smart-home platform.",
@@ -83,6 +89,10 @@ app.include_router(we_okas_projects_router)
 app.include_router(we_okas_roles_router)
 app.include_router(we_okas_si_router)
 app.include_router(shared_lookup_router)
+app.include_router(routes_projects_router)
+app.include_router(routes_users_router)
+app.include_router(routes_admin_router)
+app.include_router(routes_auth_router)
 
 
 @app.get("/health", tags=["meta"])

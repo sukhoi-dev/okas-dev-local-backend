@@ -3,6 +3,7 @@ uvicorn[standard]==0.32.1
 pymysql==1.1.2
 python-dotenv==1.0.1
 email-validator==2.2.0
+boto3==1.35.0
 sqlalchemy==1.4.50
 alembic==1.13.1
 mako>=1.1.0

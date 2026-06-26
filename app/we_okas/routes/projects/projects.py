@@ -255,7 +255,7 @@ def create_project(
         organization_id = organization_id,
         project_id      = project.id,
         new_value       = _fmt(project),
-        actor_id        = current_user["user_id"],
+        user_id=current_user["user_id"],
     ))
 
     return _resp(201, "Project created successfully", {
@@ -584,7 +584,7 @@ def update_project(
         organization_id = project.organization_id,
         project_id      = project.id,
         new_value       = _fmt(project),
-        actor_id        = current_user["user_id"],
+        user_id=current_user["user_id"],
     ))
 
     return _resp(200, "Project updated successfully", {

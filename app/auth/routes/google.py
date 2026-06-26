@@ -164,8 +164,7 @@ def google_login(body: GoogleLoginRequest, request: Request, db: Session = Depen
         )
         write_session_audit(
             db=db,
-            actor_id=user["id"],
-            actor_role=role,
+            user_id=user["id"],
             action="session.login",
             session_id=session_id,
             ip_address=ip_address,
@@ -204,8 +203,7 @@ def google_login(body: GoogleLoginRequest, request: Request, db: Session = Depen
         )
         write_session_audit(
             db=db,
-            actor_id=user["id"],
-            actor_role=role,
+            user_id=user["id"],
             action="session.login",
             session_id=session_id,
             ip_address=ip_address,

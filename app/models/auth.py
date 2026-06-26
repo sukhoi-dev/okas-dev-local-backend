@@ -17,7 +17,6 @@ class Organization(Base):
     gst_vat_number         = Column(String(50))
     logo_url               = Column(String(500))
     active_ind             = Column(Boolean, nullable=False, default=True)
-    is_archived            = Column(Boolean, nullable=False, default=False)
     updated_by             = Column(BIGINT(unsigned=True), ForeignKey("app_users.id", use_alter=True, name="fk_org_updated_by"))
     created_at             = Column(DATETIME(fsp=3), nullable=False, server_default="CURRENT_TIMESTAMP(3)")
     updated_at             = Column(DATETIME(fsp=3), nullable=False, server_default="CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)")
@@ -59,11 +58,10 @@ class AppUser(Base):
 
 class Role(Base):
     __tablename__ = "roles"
-    id              = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
-    organization_id = Column(BIGINT(unsigned=True), ForeignKey("organizations.id"), nullable=True)
-    name            = Column(String(50), nullable=False)
-    description     = Column(Text)
-    created_at      = Column(DATETIME(fsp=3), nullable=False, server_default="CURRENT_TIMESTAMP(3)")
+    id           = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
+    name         = Column(String(50), nullable=False)
+    display_name = Column(String(100), nullable=False)
+    description  = Column(Text)
 
 
 class AppUserRole(Base):
@@ -102,8 +100,8 @@ class RolePermission(Base):
     __tablename__ = "role_permissions"
     id         = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
     role_id    = Column(BIGINT(unsigned=True), ForeignKey("roles.id"), nullable=False)
-    feature    = Column(String(50), nullable=False)
-    action     = Column(String(20), nullable=False)
+    feature    = Column('feature_key', String(50), nullable=False)
+    action     = Column('action_key', String(20), nullable=False)
     is_allowed = Column(Boolean, nullable=False, default=False)
     created_at = Column(DATETIME(fsp=3), nullable=False, server_default="CURRENT_TIMESTAMP(3)")
 

@@ -59,7 +59,7 @@ def _fetch_permissions(conn, user_id: int) -> List[str]:
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT rp.feature, rp.action
+            SELECT rp.feature_key, rp.action_key
             FROM app_user_roles aur
             JOIN role_permissions rp ON rp.role_id = aur.role_id
             WHERE aur.user_id = %s AND rp.is_allowed = TRUE
@@ -67,7 +67,7 @@ def _fetch_permissions(conn, user_id: int) -> List[str]:
             (user_id,),
         )
         rows = cur.fetchall()
-    return [f"{r['feature']}.{r['action']}" for r in rows]
+    return [f"{r['feature_key']}.{r['action_key']}" for r in rows]
 
 
 def _build_login_response(user: dict) -> dict:
@@ -150,11 +150,11 @@ def get_permissions(current_user: dict = Depends(get_current_user)):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT rp.feature, rp.action, rp.is_allowed
+                SELECT rp.feature_key, rp.action_key, rp.is_allowed
                 FROM app_user_roles aur
                 JOIN role_permissions rp ON rp.role_id = aur.role_id
                 WHERE aur.user_id = %s
-                ORDER BY rp.feature, rp.action
+                ORDER BY rp.feature_key, rp.action_key
                 """,
                 (user["id"],),
             )
@@ -164,9 +164,9 @@ def get_permissions(current_user: dict = Depends(get_current_user)):
     grouped: dict = {}
     for r in rows:
         if r["is_allowed"]:
-            key = f"{r['feature']}.{r['action']}"
+            key = f"{r['feature_key']}.{r['action_key']}"
             flat.append(key)
-            grouped.setdefault(r["feature"], []).append(r["action"])
+            grouped.setdefault(r["feature_key"], []).append(r["action_key"])
 
     return _resp(
         200,

@@ -59,7 +59,6 @@ _DETAIL_SQL = """
         o.phone,
         o.gst_vat_number,
         o.active_ind,
-        o.is_archived,
         o.created_at,
         o.updated_at
     FROM organizations o
@@ -72,7 +71,6 @@ def _serialize(row) -> dict:
         if r.get(field):
             r[field] = r[field].isoformat()
     r["status"] = "Active" if r.get("active_ind") else "Inactive"
-    r["is_archived"] = bool(r.get("is_archived", False))
     r.pop("active_ind", None)
     return r
 
@@ -84,9 +82,8 @@ def _make_slug(name: str) -> str:
 
 # ── 1. List SIs ───────────────────────────────────────────────────────────────
 
-@router.get("/{distributor_id}/system-integrators")
+@router.get("/system-integrators")
 def list_sis(
-    distributor_id: int = Path(...),
     search: Optional[str] = Query(None),
     name: List[str] = Query(default=[]),
     company: List[str] = Query(default=[]),
@@ -96,10 +93,11 @@ def list_sis(
     db: Session = Depends(get_session),
     _auth: dict = Depends(require_distributor),
 ):
+    distributor_id = _auth["organization_id"]
     conditions = [
         "o.org_type = 'si'",
         "o.parent_organization_id = :dist_id",
-        "o.is_archived = 0",
+
     ]
     params: dict = {"dist_id": distributor_id}
 
@@ -145,20 +143,20 @@ def list_sis(
 
 # ── 2. Get SI detail ──────────────────────────────────────────────────────────
 
-@router.get("/{distributor_id}/system-integrators/{si_id}")
+@router.get("/system-integrators/{si_id}")
 def get_si(
-    distributor_id: int = Path(...),
     si_id: int = Path(...),
     db: Session = Depends(get_session),
     _auth: dict = Depends(require_distributor),
 ):
+    distributor_id = _auth["organization_id"]
     row = db.execute(
         text(
             f"{_DETAIL_SQL}"
             " WHERE o.id = :si_id"
             " AND o.parent_organization_id = :dist_id"
             " AND o.org_type = 'si'"
-            " AND o.is_archived = 0"
+            ""
         ),
         {"si_id": si_id, "dist_id": distributor_id},
     ).mappings().fetchone()
@@ -171,13 +169,13 @@ def get_si(
 
 # ── 3. Add new SI ─────────────────────────────────────────────────────────────
 
-@router.post("/{distributor_id}/system-integrators", status_code=201)
+@router.post("/system-integrators", status_code=201)
 def create_si(
     body: SICreate,
-    distributor_id: int = Path(...),
     db: Session = Depends(get_session),
     _auth: dict = Depends(require_distributor),
 ):
+    distributor_id = _auth["organization_id"]
     if body.status not in {"Active", "Inactive"}:
         raise HTTPException(status_code=422, detail="status must be Active or Inactive")
 
@@ -187,7 +185,7 @@ def create_si(
             WHERE email = :email
               AND parent_organization_id = :dist_id
               AND org_type = 'si'
-              AND is_archived = 0
+
         """),
         {"email": body.email, "dist_id": distributor_id},
     ).fetchone()
@@ -245,17 +243,19 @@ def create_si(
 
 # ── 4. Edit SI ────────────────────────────────────────────────────────────────
 
-@router.put("/{distributor_id}/system-integrators/{si_id}")
+@router.put("/system-integrators/{si_id}")
 def update_si(
     body: SIUpdate,
-    distributor_id: int = Path(...),
     si_id: int = Path(...),
     db: Session = Depends(get_session),
     _auth: dict = Depends(require_distributor),
 ):
+    distributor_id = _auth["organization_id"]
     org = db.get(Organization, si_id)
-    if not org or org.parent_organization_id != distributor_id or org.org_type != "si" or org.is_archived:
+    if not org or org.parent_organization_id != distributor_id or org.org_type != "si":
         raise HTTPException(status_code=404, detail="System integrator not found")
+
+    primary_email = org.email  # capture before update for user lookup
 
     if body.name is not None:
         org.name = body.name
@@ -272,7 +272,7 @@ def update_si(
     if body.status is not None:
         org.active_ind = (body.status == "Active")
 
-    # Sync app_user fields
+    # Sync only the primary contact user (matched by current org email)
     if any(f is not None for f in [body.contact_name, body.phone, body.email]):
         db.execute(
             text("""
@@ -280,13 +280,16 @@ def update_si(
                 SET full_name = COALESCE(:full_name, full_name),
                     phone     = COALESCE(:phone, phone),
                     email     = COALESCE(:email, email)
-                WHERE organization_id = :org_id AND active_ind = 1
+                WHERE organization_id = :org_id
+                  AND email = :primary_email
+                  AND active_ind = 1
             """),
             {
-                "full_name": body.contact_name,
-                "phone":     body.phone,
-                "email":     str(body.email) if body.email else None,
-                "org_id":    si_id,
+                "full_name":     body.contact_name,
+                "phone":         body.phone,
+                "email":         str(body.email) if body.email else None,
+                "org_id":        si_id,
+                "primary_email": primary_email,
             },
         )
 
@@ -302,19 +305,19 @@ def update_si(
 
 # ── 5. Toggle status ──────────────────────────────────────────────────────────
 
-@router.patch("/{distributor_id}/system-integrators/{si_id}/status")
+@router.patch("/system-integrators/{si_id}/status")
 def toggle_status(
     body: StatusBody,
-    distributor_id: int = Path(...),
     si_id: int = Path(...),
     db: Session = Depends(get_session),
     _auth: dict = Depends(require_distributor),
 ):
+    distributor_id = _auth["organization_id"]
     if body.status not in {"Active", "Inactive"}:
         raise HTTPException(status_code=422, detail="status must be Active or Inactive")
 
     org = db.get(Organization, si_id)
-    if not org or org.parent_organization_id != distributor_id or org.org_type != "si" or org.is_archived:
+    if not org or org.parent_organization_id != distributor_id or org.org_type != "si":
         raise HTTPException(status_code=404, detail="System integrator not found")
 
     org.active_ind = (body.status == "Active")
@@ -337,38 +340,38 @@ def toggle_status(
 
 # ── 6. Archive SI ─────────────────────────────────────────────────────────────
 
-@router.patch("/{distributor_id}/system-integrators/{si_id}/archive")
+@router.patch("/system-integrators/{si_id}/archive")
 def archive_si(
-    distributor_id: int = Path(...),
     si_id: int = Path(...),
     db: Session = Depends(get_session),
     _auth: dict = Depends(require_distributor),
 ):
+    distributor_id = _auth["organization_id"]
     org = db.get(Organization, si_id)
-    if not org or org.parent_organization_id != distributor_id or org.org_type != "si" or org.is_archived:
+    if not org or org.parent_organization_id != distributor_id or org.org_type != "si":
         raise HTTPException(status_code=404, detail="System integrator not found")
 
-    org.is_archived = True
+    org.active_ind = False
     return {"message": "Archived successfully"}
 
 
 # ── 7. Download SI details ────────────────────────────────────────────────────
 
-@router.get("/{distributor_id}/system-integrators/{si_id}/download")
+@router.get("/system-integrators/{si_id}/download")
 def download_si(
-    distributor_id: int = Path(...),
     si_id: int = Path(...),
     format: str = Query("pdf", pattern="^(pdf|csv)$"),
     db: Session = Depends(get_session),
     _auth: dict = Depends(require_distributor),
 ):
+    distributor_id = _auth["organization_id"]
     row = db.execute(
         text(
             f"{_DETAIL_SQL}"
             " WHERE o.id = :si_id"
             " AND o.parent_organization_id = :dist_id"
             " AND o.org_type = 'si'"
-            " AND o.is_archived = 0"
+            ""
         ),
         {"si_id": si_id, "dist_id": distributor_id},
     ).mappings().fetchone()
@@ -429,18 +432,18 @@ def download_si(
 
 # ── 8. Delete SI ──────────────────────────────────────────────────────────────
 
-@router.delete("/{distributor_id}/system-integrators/{si_id}")
+@router.delete("/system-integrators/{si_id}")
 def delete_si(
-    distributor_id: int = Path(...),
     si_id: int = Path(...),
     db: Session = Depends(get_session),
     _auth: dict = Depends(require_distributor),
 ):
+    distributor_id = _auth["organization_id"]
     org = db.get(Organization, si_id)
-    if not org or org.parent_organization_id != distributor_id or org.org_type != "si" or org.is_archived:
+    if not org or org.parent_organization_id != distributor_id or org.org_type != "si":
         raise HTTPException(status_code=404, detail="System integrator not found")
 
-    org.is_archived = True
+    org.active_ind = False
 
     # Deactivate the SI's app users
     db.execute(

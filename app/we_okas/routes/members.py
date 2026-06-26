@@ -219,7 +219,7 @@ def create_member(
 
     # Audit
     db.add(AuditLog(
-        actor_id=current_user["user_id"],
+        user_id=current_user["user_id"],
         action="member_created",
         entity_type="app_user",
         entity_id=user.id,
@@ -281,7 +281,7 @@ def update_member(
 
     # Audit
     db.add(AuditLog(
-        actor_id=current_user["user_id"],
+        user_id=current_user["user_id"],
         action="member_updated",
         entity_type="app_user",
         entity_id=member_id,
@@ -343,7 +343,7 @@ def partial_update_member(
 
     # Audit
     db.add(AuditLog(
-        actor_id=current_user["user_id"],
+        user_id=current_user["user_id"],
         action="member_patched",
         entity_type="app_user",
         entity_id=member_id,
@@ -387,7 +387,7 @@ def delete_member(
 
     # Audit
     db.add(AuditLog(
-        actor_id=current_user["user_id"],
+        user_id=current_user["user_id"],
         action="member_deleted",
         entity_type="app_user",
         entity_id=member_id,

@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from urllib.parse import quote_plus
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -9,9 +10,9 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 DATABASE_URL = (
     "mysql+pymysql://"
-    f"{os.getenv('DB_USER', 'okasdev')}:{os.getenv('DB_PASSWORD', '')}"
-    f"@{os.getenv('DB_HOST', '127.0.0.1')}:{os.getenv('DB_PORT', '3306')}"
-    f"/{os.getenv('DB_NAME', 'okas_signature')}"
+    f"{os.getenv('DB_USER', 'okasdev')}:{quote_plus(os.getenv('DB_PASSWORD', ''))}"
+    f"@{os.getenv('DB_HOST', '127.0.0.1')}:{os.getenv('DB_PORT', '3307')}"
+    f"/{os.getenv('DB_NAME', 'okascloud')}"
     "?charset=utf8mb4"
 )
 

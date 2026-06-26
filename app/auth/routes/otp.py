@@ -88,7 +88,7 @@ def send_otp(body: OtpSendRequest, db: Session = Depends(get_session)):
         text("""
             UPDATE app_otp_codes
             SET used_at = UTC_TIMESTAMP(3)
-            WHERE phone_or_email = :email
+            WHERE email = :email
               AND purpose = 'login'
               AND used_at IS NULL
               AND expires_at > UTC_TIMESTAMP(3)
@@ -101,7 +101,7 @@ def send_otp(body: OtpSendRequest, db: Session = Depends(get_session)):
 
     db.execute(
         text("""
-            INSERT INTO app_otp_codes (phone_or_email, code_hash, purpose, expires_at)
+            INSERT INTO app_otp_codes (email, code_hash, purpose, expires_at)
             VALUES (:email, :code_hash, 'login', :expires_at)
         """),
         {"email": body.email, "code_hash": hash_value(otp), "expires_at": expires_at},
@@ -129,7 +129,7 @@ def verify_otp(body: OtpVerifyRequest, request: Request, db: Session = Depends(g
         text("""
             SELECT id, code_hash, expires_at, used_at
             FROM app_otp_codes
-            WHERE phone_or_email = :email AND purpose = 'login'
+            WHERE email = :email AND purpose = 'login'
             ORDER BY created_at DESC
             LIMIT 1
         """),
@@ -164,8 +164,8 @@ def verify_otp(body: OtpVerifyRequest, request: Request, db: Session = Depends(g
 
     db.execute(
         text("""
-            INSERT INTO app_sessions (user_id, token_hash, ip_address, expires_at, last_active_at)
-            VALUES (:user_id, :token_hash, :ip, :expires_at, UTC_TIMESTAMP(3))
+            INSERT INTO app_sessions (user_id, token_hash, ip_address, expires_at)
+            VALUES (:user_id, :token_hash, :ip, :expires_at)
         """),
         {
             "user_id":    user["id"],

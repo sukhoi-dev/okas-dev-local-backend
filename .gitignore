@@ -9,3 +9,5 @@ __pycache__/
 *.log
 mysql_setup.sh
 okasfrontend
+alembic.ini
+alembic/
