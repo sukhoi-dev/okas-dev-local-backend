@@ -182,7 +182,8 @@ def verify_otp(body: OtpVerifyRequest, request: Request, db: Session = Depends(g
 
     write_session_audit(
         db=db,
-        user_id=user["id"],
+        actor_id=user["id"],
+        actor_role=user.get("role"),
         action="session.login",
         session_id=session_row["id"] if session_row else None,
         ip_address=ip_address,
