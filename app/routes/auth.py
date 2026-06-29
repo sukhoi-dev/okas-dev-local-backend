@@ -57,8 +57,17 @@ def verify_user(payload: VerifyRequest):
     if email_lower in super_admins:
         # Super admins may or may not be in app_users — always let them through
         _stamp_last_login_if_exists(email_lower)
+        access_token = create_access_token({
+            "id":              0,
+            "email":           payload.email,
+            "full_name":       "Super Admin",
+            "organization_id": None,
+            "role":            "super_admin",
+            "org_type":        None,
+        })
         return {
-            "success": True,
+            "success":      True,
+            "access_token": access_token,
             "data": {
                 "email":          payload.email,
                 "is_super_admin": True,
@@ -114,13 +123,24 @@ def verify_user(payload: VerifyRequest):
             )
 
     roles_list = user["roles"].split(",") if user["roles"] else []
+    role       = roles_list[0] if roles_list else None
 
     user["active_ind"]    = bool(user["active_ind"])
     user["is_super_admin"] = False
     user["roles"]          = roles_list
 
+    access_token = create_access_token({
+        "id":              user["id"],
+        "email":           user["email"],
+        "full_name":       user["full_name"],
+        "organization_id": user["organization_id"],
+        "role":            role,
+        "org_type":        org_type,
+    })
+
     return {
-        "success": True,
+        "success":      True,
+        "access_token": access_token,
         "data": user,
         "user": {
             "id":              user["id"],
@@ -128,8 +148,9 @@ def verify_user(payload: VerifyRequest):
             "email":           user["email"],
             "phone":           user["phone"],
             "organization_id": user["organization_id"],
-            "role":            roles_list[0] if roles_list else None,
+            "role":            role,
             "org_type":        org_type,
+            "is_super_admin":  False,
         },
     }
 
