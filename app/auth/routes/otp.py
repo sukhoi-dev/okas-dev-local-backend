@@ -164,8 +164,8 @@ def verify_otp(body: OtpVerifyRequest, request: Request, db: Session = Depends(g
 
     db.execute(
         text("""
-            INSERT INTO app_sessions (user_id, token_hash, ip_address, expires_at, last_active_at)
-            VALUES (:user_id, :token_hash, :ip, :expires_at, UTC_TIMESTAMP(3))
+            INSERT INTO app_sessions (user_id, token_hash, ip_address, expires_at)
+            VALUES (:user_id, :token_hash, :ip, :expires_at)
         """),
         {
             "user_id":    user["id"],
