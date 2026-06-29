@@ -15,13 +15,12 @@ def write_session_audit(
     db.execute(
         text("""
             INSERT INTO audit_logs
-                (actor_id, actor_role, action, entity_type, entity_id, organization_id, ip_address)
+                (user_id, action, entity_type, entity_id, organization_id, ip_address)
             VALUES
-                (:actor_id, :actor_role, :action, 'session', :entity_id, :organization_id, :ip_address)
+                (:user_id, :action, 'session', :entity_id, :organization_id, :ip_address)
         """),
         {
-            "actor_id":        actor_id,
-            "actor_role":      actor_role,
+            "user_id":         actor_id,
             "action":          action,
             "entity_id":       session_id,
             "organization_id": org_id,
