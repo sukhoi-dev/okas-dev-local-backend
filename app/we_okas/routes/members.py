@@ -141,7 +141,9 @@ def list_members(
     db: Session           = Depends(get_orm_session),
 ):
     org_id = current_user["organization_id"]
-    q = _member_query(db).filter(AppUser.organization_id == org_id)
+    q = _member_query(db)
+    if org_id is not None:
+        q = q.filter(AppUser.organization_id == org_id)
     q = q.filter(or_(Role.name != 'distributor', Role.name == None))
 
     if status == "inactive":
@@ -172,10 +174,10 @@ def get_member(
     db: Session        = Depends(get_orm_session),
 ):
     org_id = current_user["organization_id"]
-    row = _member_query(db).filter(
-        AppUser.id == member_id,
-        AppUser.organization_id == org_id,
-    ).first()
+    q = _member_query(db).filter(AppUser.id == member_id)
+    if org_id is not None:
+        q = q.filter(AppUser.organization_id == org_id)
+    row = q.first()
     if not row:
         return _err(404, "Member not found")
     return _resp(200, "Member retrieved successfully", _fmt(row))
@@ -189,7 +191,8 @@ def create_member(
     current_user: dict = Depends(require_permission("members", "create")),
     db: Session        = Depends(get_orm_session),
 ):
-    org_id = current_user["organization_id"]
+    # Super admins use organization_id from the request body
+    org_id = current_user["organization_id"] or body.organization_id
 
     # Validate: email uniqueness
     if db.query(AppUser).filter(AppUser.email == str(body.email)).first():
@@ -199,7 +202,7 @@ def create_member(
     if not db.query(Role).filter(Role.id == body.role_id).first():
         return _err(404, "Role not found")
 
-    # Create user scoped to the caller's organisation
+    # Create user scoped to the organisation
     user = AppUser(
         organization_id=org_id,
         full_name=body.full_name,
@@ -219,7 +222,7 @@ def create_member(
 
     # Audit
     db.add(AuditLog(
-        user_id=current_user["user_id"],
+        user_id=current_user["user_id"] or None,
         action="member_created",
         entity_type="app_user",
         entity_id=user.id,
@@ -241,12 +244,14 @@ def update_member(
     db: Session        = Depends(get_orm_session),
 ):
     org_id = current_user["organization_id"]
-    user = db.query(AppUser).filter(
-        AppUser.id == member_id,
-        AppUser.organization_id == org_id,
-    ).first()
+    q = db.query(AppUser).filter(AppUser.id == member_id)
+    if org_id is not None:
+        q = q.filter(AppUser.organization_id == org_id)
+    user = q.first()
     if not user:
         return _err(404, "Member not found")
+
+    effective_org_id = org_id if org_id is not None else user.organization_id
 
     # Email uniqueness (only if changing)
     if str(body.email).lower() != user.email.lower():
@@ -260,28 +265,28 @@ def update_member(
     if not db.query(Role).filter(Role.id == body.role_id).first():
         return _err(404, "Role not found")
 
-    # Update user fields (organisation_id is always the caller's org — never reassigned)
+    # Update user fields
     user.full_name  = body.full_name
     user.email      = str(body.email)
     user.phone      = body.phone
     user.active_ind = (body.status == "active")
-    user.updated_by = current_user["user_id"]
+    user.updated_by = current_user["user_id"] or None
 
     # Replace role assignment within the organisation
     db.query(AppUserRole).filter(
         AppUserRole.user_id         == member_id,
-        AppUserRole.organization_id == org_id,
+        AppUserRole.organization_id == effective_org_id,
     ).delete(synchronize_session=False)
 
     db.add(AppUserRole(
         user_id=member_id,
         role_id=body.role_id,
-        organization_id=org_id,
+        organization_id=effective_org_id,
     ))
 
     # Audit
     db.add(AuditLog(
-        user_id=current_user["user_id"],
+        user_id=current_user["user_id"] or None,
         action="member_updated",
         entity_type="app_user",
         entity_id=member_id,
@@ -301,12 +306,14 @@ def partial_update_member(
     db: Session        = Depends(get_orm_session),
 ):
     org_id = current_user["organization_id"]
-    user = db.query(AppUser).filter(
-        AppUser.id == member_id,
-        AppUser.organization_id == org_id,
-    ).first()
+    q = db.query(AppUser).filter(AppUser.id == member_id)
+    if org_id is not None:
+        q = q.filter(AppUser.organization_id == org_id)
+    user = q.first()
     if not user:
         return _err(404, "Member not found")
+
+    effective_org_id = org_id if org_id is not None else user.organization_id
 
     # Email uniqueness (only if changing)
     if body.email is not None and str(body.email).lower() != user.email.lower():
@@ -326,24 +333,24 @@ def partial_update_member(
     if body.email     is not None: user.email      = str(body.email)
     if body.phone     is not None: user.phone      = body.phone
     if body.status    is not None: user.active_ind = (body.status == "active")
-    user.updated_by = current_user["user_id"]
+    user.updated_by = current_user["user_id"] or None
 
     # Replace role assignment only if role_id was supplied
     if body.role_id is not None:
         db.query(AppUserRole).filter(
             AppUserRole.user_id         == member_id,
-            AppUserRole.organization_id == org_id,
+            AppUserRole.organization_id == effective_org_id,
         ).delete(synchronize_session=False)
 
         db.add(AppUserRole(
             user_id=member_id,
             role_id=body.role_id,
-            organization_id=org_id,
+            organization_id=effective_org_id,
         ))
 
     # Audit
     db.add(AuditLog(
-        user_id=current_user["user_id"],
+        user_id=current_user["user_id"] or None,
         action="member_patched",
         entity_type="app_user",
         entity_id=member_id,
@@ -363,17 +370,19 @@ def delete_member(
     db: Session        = Depends(get_orm_session),
 ):
     org_id = current_user["organization_id"]
-    user = db.query(AppUser).filter(
-        AppUser.id              == member_id,
-        AppUser.organization_id == org_id,
-        AppUser.active_ind      == True,
-    ).first()
+    q = db.query(AppUser).filter(
+        AppUser.id         == member_id,
+        AppUser.active_ind == True,
+    )
+    if org_id is not None:
+        q = q.filter(AppUser.organization_id == org_id)
+    user = q.first()
     if not user:
         return _err(404, "Member not found or already inactive")
 
     # Soft-delete: deactivate user record
     user.active_ind = False
-    user.updated_by = current_user["user_id"]
+    user.updated_by = current_user["user_id"] or None
 
     # Revoke all project memberships
     db.query(ProjectMember).filter(
@@ -387,7 +396,7 @@ def delete_member(
 
     # Audit
     db.add(AuditLog(
-        user_id=current_user["user_id"],
+        user_id=current_user["user_id"] or None,
         action="member_deleted",
         entity_type="app_user",
         entity_id=member_id,

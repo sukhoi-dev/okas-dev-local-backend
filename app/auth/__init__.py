@@ -47,6 +47,9 @@ def get_current_user(
 
 def require_permission(feature: str, action: str):
     def _checker(current_user: dict = Depends(get_current_user)) -> dict:
+        # Super admins bypass all DB permission checks
+        if current_user.get("role") == "super_admin":
+            return current_user
         from app.db import get_db
         with get_db() as conn:
             with conn.cursor() as cur:
