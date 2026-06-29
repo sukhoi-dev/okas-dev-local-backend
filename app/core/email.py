@@ -1,21 +1,12 @@
 import os
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import boto3
+from botocore.exceptions import ClientError
+
+_AWS_REGION    = os.getenv("AWS_REGION", "ap-south-1")
+_SES_FROM      = os.getenv("SES_FROM_EMAIL", "noreply@okas.ai")
 
 
 def send_otp_email(to_email: str, otp_code: str) -> None:
-    smtp_host     = os.getenv("SMTP_HOST", "smtp.gmail.com")
-    smtp_port     = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user     = os.getenv("SMTP_USER", "")
-    smtp_password = os.getenv("SMTP_PASSWORD", "")
-    smtp_from     = os.getenv("SMTP_FROM", smtp_user)
-
-    msg             = MIMEMultipart("alternative")
-    msg["Subject"]  = "Your OKAS Login OTP"
-    msg["From"]     = smtp_from
-    msg["To"]       = to_email
-
     text_body = (
         f"Your OKAS login OTP is: {otp_code}\n\n"
         "This code expires in 10 minutes. Do not share it with anyone."
@@ -28,11 +19,18 @@ def send_otp_email(to_email: str, otp_code: str) -> None:
     </body></html>
     """
 
-    msg.attach(MIMEText(text_body, "plain"))
-    msg.attach(MIMEText(html_body, "html"))
-
-    with smtplib.SMTP(smtp_host, smtp_port) as server:
-        server.ehlo()
-        server.starttls()
-        server.login(smtp_user, smtp_password)
-        server.sendmail(smtp_from, to_email, msg.as_string())
+    client = boto3.client("ses", region_name=_AWS_REGION)
+    try:
+        client.send_email(
+            Source=_SES_FROM,
+            Destination={"ToAddresses": [to_email]},
+            Message={
+                "Subject": {"Data": "Your OKAS Login OTP", "Charset": "UTF-8"},
+                "Body": {
+                    "Text": {"Data": text_body, "Charset": "UTF-8"},
+                    "Html": {"Data": html_body, "Charset": "UTF-8"},
+                },
+            },
+        )
+    except ClientError as exc:
+        raise RuntimeError(exc.response["Error"]["Message"]) from exc
