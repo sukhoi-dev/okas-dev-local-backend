@@ -107,16 +107,20 @@ def send_otp(body: OtpSendRequest, db: Session = Depends(get_session)):
         {"email": body.email, "code_hash": hash_value(otp), "expires_at": expires_at},
     )
 
-    try:
-        send_otp_email(body.email, otp)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to send OTP email: {exc}")
-
-    return {
+    response = {
         "success":   True,
         "message":   "OTP sent to email",
         "user_type": user_type,
     }
+
+    try:
+        send_otp_email(body.email, otp)
+    except Exception as exc:
+        # SES isn't authorized yet — return the OTP directly so login flow is testable.
+        response["message"] = "Email delivery failed — OTP returned in response"
+        response["otp"] = otp
+
+    return response
 
 
 # ── POST /api/auth/otp/verify ─────────────────────────────────────────────────

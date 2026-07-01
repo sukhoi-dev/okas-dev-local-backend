@@ -21,7 +21,8 @@ from app.we_okas.routes.roles import router as we_okas_roles_router
 from app.we_okas.routes.system_integrators import router as we_okas_si_router
 
 # ── Design Studio routes ──────────────────────────────────────────────────
-# (add imports here as design_studio routes are built)
+from app.design_studio.routes.floors import router as design_studio_floors_router
+from app.design_studio.routes.rooms import router as design_studio_rooms_router
 
 # ── Shared API routes ─────────────────────────────────────────────────────
 from app.shared_api.routes.lookup import router as shared_lookup_router
@@ -88,6 +89,8 @@ app.include_router(we_okas_orgs_router)
 app.include_router(we_okas_projects_router)
 app.include_router(we_okas_roles_router)
 app.include_router(we_okas_si_router)
+app.include_router(design_studio_floors_router)
+app.include_router(design_studio_rooms_router)
 app.include_router(shared_lookup_router)
 app.include_router(routes_projects_router)
 app.include_router(routes_users_router)
